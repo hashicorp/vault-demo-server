@@ -65,7 +65,7 @@ func (v *client) CLI(raw []string) (int, string, string) {
 			ErrorWriter: &stderr,
 		},
 
-		ForceAddress: v.listener.Addr().String(),
+		ForceAddress: fmt.Sprintf("http://%s", v.listener.Addr()),
 		ForceConfig: &vaultcommand.Config{
 			TokenHelper: fmt.Sprintf("%s -token=%s", selfPath, v.id),
 		},
