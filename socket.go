@@ -28,6 +28,9 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// CORS
+	w.Header().Add("Access-Control-Allow-Origin", "*")
+
 	// Upgrade the connection to a websocket connection
 	ws, err := wsUpgrader.Upgrade(w, r, nil)
 	if err != nil {
