@@ -39,6 +39,9 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Note connection closed
+	log.Printf("[INFO] %s: connection open", ws.RemoteAddr())
+
 	// Create a new core
 	vault, err := NewClient()
 	if err != nil {
@@ -78,6 +81,9 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+
+	// Note connection closed
+	log.Printf("[INFO] %s: connection closed", ws.RemoteAddr())
 }
 
 type wsMessage struct {

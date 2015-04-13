@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"log"
 
 	"github.com/gorilla/websocket"
 	"github.com/mattn/go-shellwords"
@@ -27,6 +28,7 @@ func messageCLI(ws *websocket.Conn, vault *client) MessageHandler {
 			return fmt.Errorf("only `vault` can be executed")
 		}
 
+		log.Printf("[DEBUG] %s: executing: %v", ws.RemoteAddr(), args)
 		code, stdout, stderr := vault.CLI(args)
 		return ws.WriteJSON(&messageCLIResponse{
 			ExitCode: code,
