@@ -54,13 +54,12 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	for {
 		var message wsMessage
 		if err := ws.ReadJSON(&message); err != nil {
-			if err == io.EOF {
-				break
+			if err != io.EOF {
+				log.Printf("[ERR] %s", err)
+				http.Error(w, "Bad request", 400)
 			}
 
-			log.Printf("[ERR] %s", err)
-			http.Error(w, "Bad request", 400)
-			continue
+			break
 		}
 
 		// Depending on the type of the message do something else
@@ -78,6 +77,7 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		if handler != nil {
 			if err := handler(message.Data); err != nil {
 				http.Error(w, fmt.Sprintf("error: %s", err), 400)
+				break
 			}
 		}
 	}
