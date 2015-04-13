@@ -18,6 +18,7 @@ const (
 var wsUpgrader = websocket.Upgrader{
 	ReadBufferSize:  2048,
 	WriteBufferSize: 2048,
+	CheckOrigin:     func(*http.Request) bool { return true },
 }
 
 // handleWebSocket handles websocket requests
