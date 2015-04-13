@@ -38,6 +38,7 @@ func realMain() int {
 	http.HandleFunc("/socket", handleWebSocket)
 
 	log.Println("[INFO] Starting server...")
+	log.Printf("[INFO] Executable (selfPath) = %s", selfPath)
 	if err := http.ListenAndServe(*addr, nil); err != nil {
 		log.Printf("[FATAL] error starting: %s", err)
 		return 1
