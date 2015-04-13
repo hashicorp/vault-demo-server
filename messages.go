@@ -24,12 +24,12 @@ func messageCLI(ws *websocket.Conn, vault *client) MessageHandler {
 			return err
 		}
 
-		if args[0] != "vault" {
+		if len(args) == 0 || args[0] != "vault" {
 			return fmt.Errorf("only `vault` can be executed")
 		}
 
 		log.Printf("[DEBUG] %s: executing: %v", ws.RemoteAddr(), args)
-		code, stdout, stderr := vault.CLI(args)
+		code, stdout, stderr := vault.CLI(args[1:])
 		return ws.WriteJSON(&messageCLIResponse{
 			ExitCode: code,
 			Stdout:   stdout,
