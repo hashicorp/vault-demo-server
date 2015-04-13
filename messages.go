@@ -31,9 +31,14 @@ func messageCLI(ws *websocket.Conn, vault *client) MessageHandler {
 		}
 
 		if len(args) == 0 || args[0] != "vault" {
+			command := "<empty>"
+			if len(args) > 0 {
+				command = args[0]
+			}
+
 			return ws.WriteJSON(&messageCLIResponse{
 				ExitCode: 127,
-				Stderr:   fmt.Sprintf("invalid command: %s", args[0]),
+				Stderr:   fmt.Sprintf("invalid command: %s", command),
 			})
 		}
 
