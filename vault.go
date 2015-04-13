@@ -67,7 +67,7 @@ func (v *client) CLI(raw []string) (int, string, string) {
 
 		ForceAddress: v.listener.Addr().String(),
 		ForceConfig: &vaultcommand.Config{
-			TokenHelper: fmt.Sprintf("%s -token=%d", selfPath, v.id),
+			TokenHelper: fmt.Sprintf("%s -token=%s", selfPath, v.id),
 		},
 	})
 
