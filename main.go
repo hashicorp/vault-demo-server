@@ -5,9 +5,14 @@ import (
 	"log"
 	"net/http"
 	"os"
+
+	"github.com/mitchellh/osext"
 )
 
 var addr = flag.String("addr", ":8080", "http service address")
+var token = flag.String("token", "", "token id (internal)")
+
+var selfPath string
 
 func main() {
 	os.Exit(realMain())
@@ -15,6 +20,19 @@ func main() {
 
 func realMain() int {
 	flag.Parse()
+
+	// If we have a token set, then we're in token handler mode. Do it!
+	if *token != "" {
+		return mainToken(*token, flag.Args())
+	}
+
+	// Set our own path for later
+	var err error
+	selfPath, err = osext.Executable()
+	if err != nil {
+		log.Printf("[FATAL] Error getting executable path:%s", err)
+		return 1
+	}
 
 	http.HandleFunc("/", handleRoot)
 	http.HandleFunc("/socket", handleWebSocket)

@@ -2,8 +2,12 @@ package main
 
 import (
 	"bytes"
+	"fmt"
+	"math"
+	"math/rand"
 	"net"
 	"net/http"
+	"strconv"
 	"sync"
 
 	vaultcli "github.com/hashicorp/vault/cli"
@@ -17,6 +21,7 @@ import (
 // client represents a single vault instance: a single websocket connection.
 // When this is closed, the Vault on the other side will be cleared.
 type client struct {
+	id       string
 	core     *vault.Core
 	listener net.Listener
 
@@ -42,6 +47,7 @@ func NewClient() (*client, error) {
 	go http.Serve(ln, vaulthttp.Handler(core))
 
 	return &client{
+		id:       strconv.FormatInt(int64(rand.Int31n(math.MaxInt32)), 10),
 		core:     core,
 		listener: ln,
 	}, nil
@@ -51,6 +57,7 @@ func NewClient() (*client, error) {
 // to the in-memory Vault will be prepended to the args.
 func (v *client) CLI(raw []string) (int, string, string) {
 	var stdout, stderr bytes.Buffer
+
 	// Build our CLI commands
 	commands := vaultcli.Commands(&vaultcommand.Meta{
 		Ui: &cli.BasicUi{
@@ -59,7 +66,9 @@ func (v *client) CLI(raw []string) (int, string, string) {
 		},
 
 		ForceAddress: v.listener.Addr().String(),
-		ForceConfig:  &vaultcommand.Config{},
+		ForceConfig: &vaultcommand.Config{
+			TokenHelper: fmt.Sprintf("%s -token=%d", selfPath, v.id),
+		},
 	})
 
 	exitCode := vaultcli.RunCustom(raw, commands)
