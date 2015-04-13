@@ -33,7 +33,10 @@ type client struct {
 func NewClient() (*client, error) {
 	// Create the core, sealed and in-memory
 	core, err := vault.NewCore(&vault.CoreConfig{
-		Physical: physical.NewInmem(),
+		Physical: &Physical{
+			Backend: physical.NewInmem(),
+			Limit:   64000,
+		},
 	})
 	if err != nil {
 		return nil, err
