@@ -159,6 +159,10 @@
 			"Rev": "442e588f213303bec7936deba67901f8fc8f18b1"
 		},
 		{
+			"ImportPath": "github.com/mitchellh/osext",
+			"Rev": "0dd3f918b21bec95ace9dc86c7e70266cfc5c702"
+		},
+		{
 			"ImportPath": "github.com/ryanuber/columnize",
 			"Comment": "v2.0.1-6-g44cb478",
 			"Rev": "44cb4788b2ec3c3d158dd3d1b50aba7d66f4b59a"
