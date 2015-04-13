@@ -24,6 +24,7 @@ type Physical struct {
 func (p *Physical) Put(e *physical.Entry) error {
 	p.lock.Lock()
 	defer p.lock.Unlock()
+	p.once.Do(p.init)
 
 	// Determine if we'll pass the threshold
 	written := p.total
@@ -47,6 +48,7 @@ func (p *Physical) Put(e *physical.Entry) error {
 func (p *Physical) Delete(key string) error {
 	p.lock.Lock()
 	defer p.lock.Unlock()
+	p.once.Do(p.init)
 
 	// Nope, write it
 	if err := p.Backend.Delete(key); err != nil {
@@ -57,4 +59,8 @@ func (p *Physical) Delete(key string) error {
 	p.total -= p.current[key]
 	delete(p.current, key)
 	return nil
+}
+
+func (p *Physical) init() {
+	p.current = make(map[string]uint64)
 }
