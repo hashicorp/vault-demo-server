@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 
@@ -18,6 +19,7 @@ func mainToken(session string, args []string) int {
 		return 2
 	}
 
+	log.Printf("[DEBUG] token: %v %s", args, path)
 	helper := &vaultDisk.Command{Path: path}
 	return helper.Run(args)
 }
