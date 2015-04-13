@@ -16,12 +16,18 @@ func messageCLI(ws *websocket.Conn, vault *client) MessageHandler {
 	return func(data map[string]interface{}) error {
 		var req messageCLIRequest
 		if err := mapstructure.WeakDecode(data, &req); err != nil {
-			return err
+			return ws.WriteJSON(&messageCLIResponse{
+				ExitCode: 1,
+				Stderr:   fmt.Sprintf("error decoding command: %s", err),
+			})
 		}
 
 		args, err := shellwords.Parse(req.Command)
 		if err != nil {
-			return err
+			return ws.WriteJSON(&messageCLIResponse{
+				ExitCode: 1,
+				Stderr:   fmt.Sprintf("error parsing command: %s", err),
+			})
 		}
 
 		if len(args) == 0 || args[0] != "vault" {
