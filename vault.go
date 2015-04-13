@@ -53,11 +53,13 @@ func (v *client) CLI(raw []string) (int, string, string) {
 	var stdout, stderr bytes.Buffer
 	// Build our CLI commands
 	commands := vaultcli.Commands(&vaultcommand.Meta{
-		Address: v.listener.Addr().String(),
 		Ui: &cli.BasicUi{
 			Writer:      &stdout,
 			ErrorWriter: &stderr,
 		},
+
+		ForceAddress: v.listener.Addr().String(),
+		ForceConfig:  &vaultcommand.Config{},
 	})
 
 	exitCode := vaultcli.RunCustom(raw, commands)
