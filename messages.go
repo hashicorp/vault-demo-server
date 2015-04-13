@@ -25,7 +25,10 @@ func messageCLI(ws *websocket.Conn, vault *client) MessageHandler {
 		}
 
 		if len(args) == 0 || args[0] != "vault" {
-			return fmt.Errorf("only `vault` can be executed")
+			return ws.WriteJSON(&messageCLIResponse{
+				ExitCode: 127,
+				Stderr:   fmt.Sprintf("invalid command: %s", args[0]),
+			})
 		}
 
 		log.Printf("[DEBUG] %s: executing: %v", ws.RemoteAddr(), args)
