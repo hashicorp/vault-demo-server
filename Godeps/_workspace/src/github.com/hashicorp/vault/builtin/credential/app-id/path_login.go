@@ -1,6 +1,8 @@
 package appId
 
 import (
+	"fmt"
+	"net"
 	"strings"
 
 	"github.com/hashicorp/vault/logical"
@@ -34,9 +36,35 @@ func (b *backend) pathLogin(
 	userId := data.Get("user_id").(string)
 
 	// Look up the apps that this user is allowed to access
-	apps, err := b.MapUserId.Get(req.Storage, userId)
+	appsMap, err := b.MapUserId.Get(req.Storage, userId)
 	if err != nil {
 		return nil, err
+	}
+
+	// If there is a CIDR block restriction, check that
+	if raw, ok := appsMap["cidr_block"]; ok {
+		_, cidr, err := net.ParseCIDR(raw.(string))
+		if err != nil {
+			return nil, fmt.Errorf("invalid restriction cidr: %s", err)
+		}
+
+		var addr string
+		if req.Connection != nil {
+			addr = req.Connection.RemoteAddr
+		}
+		if addr == "" || !cidr.Contains(net.ParseIP(addr)) {
+			return logical.ErrorResponse("unauthorized source address"), nil
+		}
+	}
+
+	appsRaw, ok := appsMap["value"]
+	if !ok {
+		appsRaw = ""
+	}
+
+	apps, ok := appsRaw.(string)
+	if !ok {
+		return nil, fmt.Errorf("internal error: mapping is not a string")
 	}
 
 	// Verify that the app is in the list
@@ -56,9 +84,22 @@ func (b *backend) pathLogin(
 		return nil, err
 	}
 
+	// Get the raw data associated with the app
+	appRaw, err := b.MapAppId.Get(req.Storage, appId)
+	if err != nil {
+		return nil, err
+	}
+
+	// Check if we have a display name
+	var displayName string
+	if raw, ok := appRaw["display_name"]; ok {
+		displayName = raw.(string)
+	}
+
 	return &logical.Response{
 		Auth: &logical.Auth{
-			Policies: policies,
+			DisplayName: displayName,
+			Policies:    policies,
 		},
 	}, nil
 }

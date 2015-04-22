@@ -4,7 +4,9 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
+	"github.com/armon/go-metrics"
 	"github.com/hashicorp/consul/api"
 )
 
@@ -64,6 +66,7 @@ func newConsulBackend(conf map[string]string) (Backend, error) {
 
 // Put is used to insert or update an entry
 func (c *ConsulBackend) Put(entry *Entry) error {
+	defer metrics.MeasureSince([]string{"consul", "put"}, time.Now())
 	pair := &api.KVPair{
 		Key:   c.path + entry.Key,
 		Value: entry.Value,
@@ -74,6 +77,7 @@ func (c *ConsulBackend) Put(entry *Entry) error {
 
 // Get is used to fetch an entry
 func (c *ConsulBackend) Get(key string) (*Entry, error) {
+	defer metrics.MeasureSince([]string{"consul", "get"}, time.Now())
 	pair, _, err := c.kv.Get(c.path+key, nil)
 	if err != nil {
 		return nil, err
@@ -90,6 +94,7 @@ func (c *ConsulBackend) Get(key string) (*Entry, error) {
 
 // Delete is used to permanently delete an entry
 func (c *ConsulBackend) Delete(key string) error {
+	defer metrics.MeasureSince([]string{"consul", "delete"}, time.Now())
 	_, err := c.kv.Delete(c.path+key, nil)
 	return err
 }
@@ -97,6 +102,7 @@ func (c *ConsulBackend) Delete(key string) error {
 // List is used ot list all the keys under a given
 // prefix, up to the next prefix.
 func (c *ConsulBackend) List(prefix string) ([]string, error) {
+	defer metrics.MeasureSince([]string{"consul", "list"}, time.Now())
 	scan := c.path + prefix
 	out, _, err := c.kv.Keys(scan, "/", nil)
 	for idx, val := range out {
@@ -104,4 +110,53 @@ func (c *ConsulBackend) List(prefix string) ([]string, error) {
 	}
 	sort.Strings(out)
 	return out, err
+}
+
+// Lock is used for mutual exclusion based on the given key.
+func (c *ConsulBackend) LockWith(key, value string) (Lock, error) {
+	// Create the lock
+	opts := &api.LockOptions{
+		Key:         key,
+		Value:       []byte(value),
+		SessionName: "Vault Lock",
+	}
+	lock, err := c.client.LockOpts(opts)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create lock: %v", err)
+	}
+	cl := &ConsulLock{
+		client: c.client,
+		key:    key,
+		lock:   lock,
+	}
+	return cl, nil
+}
+
+// ConsulLock is used to provide the Lock interface backed by Consul
+type ConsulLock struct {
+	client *api.Client
+	key    string
+	lock   *api.Lock
+}
+
+func (c *ConsulLock) Lock(stopCh <-chan struct{}) (<-chan struct{}, error) {
+	return c.lock.Lock(stopCh)
+}
+
+func (c *ConsulLock) Unlock() error {
+	return c.lock.Unlock()
+}
+
+func (c *ConsulLock) Value() (bool, string, error) {
+	kv := c.client.KV()
+	pair, _, err := kv.Get(c.key, nil)
+	if err != nil {
+		return false, "", err
+	}
+	if pair == nil {
+		return false, "", nil
+	}
+	held := pair.Session != ""
+	value := string(pair.Value)
+	return held, value, nil
 }

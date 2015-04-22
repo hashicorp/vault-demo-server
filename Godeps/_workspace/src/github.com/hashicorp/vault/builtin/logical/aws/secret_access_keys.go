@@ -13,7 +13,7 @@ import (
 
 const SecretAccessKeyType = "access_keys"
 
-func secretAccessKeys() *framework.Secret {
+func secretAccessKeys(b *backend) *framework.Secret {
 	return &framework.Secret{
 		Type: SecretAccessKeyType,
 		Fields: map[string]*framework.FieldSchema{
@@ -28,13 +28,17 @@ func secretAccessKeys() *framework.Secret {
 			},
 		},
 
+		DefaultDuration:    1 * time.Hour,
+		DefaultGracePeriod: 10 * time.Minute,
+
+		Renew:  b.secretAccessKeysRenew,
 		Revoke: secretAccessKeysRevoke,
 	}
 }
 
 func (b *backend) secretAccessKeysCreate(
 	s logical.Storage,
-	policyName string, policy string) (*logical.Response, error) {
+	displayName, policyName string, policy string) (*logical.Response, error) {
 	client, err := clientIAM(s)
 	if err != nil {
 		return logical.ErrorResponse(err.Error()), nil
@@ -42,7 +46,7 @@ func (b *backend) secretAccessKeysCreate(
 
 	// Generate a random username. We don't put the policy names in the
 	// username because the AWS console makes it pretty easy to see that.
-	username := fmt.Sprintf("vault-%d-%d", time.Now().Unix(), rand.Int31n(10000))
+	username := fmt.Sprintf("vault-%s-%d-%d", displayName, time.Now().Unix(), rand.Int31n(10000))
 
 	// Write to the WAL that this user will be created. We do this before
 	// the user is created because if switch the order then the WAL put
@@ -99,6 +103,20 @@ func (b *backend) secretAccessKeysCreate(
 		"username": username,
 		"policy":   policy,
 	}), nil
+}
+
+func (b *backend) secretAccessKeysRenew(
+	req *logical.Request, d *framework.FieldData) (*logical.Response, error) {
+	lease, err := b.Lease(req.Storage)
+	if err != nil {
+		return nil, err
+	}
+	if lease == nil {
+		lease = &configLease{Lease: 1 * time.Hour}
+	}
+
+	f := framework.LeaseExtend(lease.Lease, lease.LeaseMax)
+	return f(req, d)
 }
 
 func secretAccessKeysRevoke(

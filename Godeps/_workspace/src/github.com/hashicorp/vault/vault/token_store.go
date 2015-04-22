@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 
@@ -32,6 +33,11 @@ const (
 	// tokenSubPath is the sub-path used for the token store
 	// view. This is nested under the system view.
 	tokenSubPath = "token/"
+)
+
+var (
+	// displayNameSanitize is used to sanitize a display name given to a token.
+	displayNameSanitize = regexp.MustCompile("[^a-zA-Z0-9-]")
 )
 
 // TokenStore is used to manage client tokens. Tokens are used for
@@ -222,11 +228,13 @@ func NewTokenStore(c *Core) (*TokenStore, error) {
 
 // TokenEntry is used to represent a given token
 type TokenEntry struct {
-	ID       string            // ID of this entry, generally a random UUID
-	Parent   string            // Parent token, used for revocation trees
-	Policies []string          // Which named policies should be used
-	Path     string            // Used for audit trails, this is something like "auth/user/login"
-	Meta     map[string]string // Used for auditing. This could include things like "source", "user", "ip"
+	ID          string            // ID of this entry, generally a random UUID
+	Parent      string            // Parent token, used for revocation trees
+	Policies    []string          // Which named policies should be used
+	Path        string            // Used for audit trails, this is something like "auth/user/login"
+	Meta        map[string]string // Used for auditing. This could include things like "source", "user", "ip"
+	DisplayName string            // Used for operators to be able to associate with the source
+	NumUses     int               // Used to restrict the number of uses (zero is unlimited). This is to support one-time-tokens (generalized).
 }
 
 // SetExpirationManager is used to provide the token store with
@@ -246,8 +254,9 @@ func (ts *TokenStore) SaltID(id string) string {
 // RootToken is used to generate a new token with root privileges and no parent
 func (ts *TokenStore) RootToken() (*TokenEntry, error) {
 	te := &TokenEntry{
-		Policies: []string{"root"},
-		Path:     "auth/token/root",
+		Policies:    []string{"root"},
+		Path:        "auth/token/root",
+		DisplayName: "root",
 	}
 	if err := ts.Create(te); err != nil {
 		return nil, err
@@ -294,6 +303,43 @@ func (ts *TokenStore) Create(entry *TokenEntry) error {
 	}
 
 	// Write the primary ID
+	path := lookupPrefix + saltedId
+	le := &logical.StorageEntry{Key: path, Value: enc}
+	if err := ts.view.Put(le); err != nil {
+		return fmt.Errorf("failed to persist entry: %v", err)
+	}
+	return nil
+}
+
+// UseToken is used to manage restricted use tokens and decrement
+// their available uses.
+func (ts *TokenStore) UseToken(te *TokenEntry) error {
+	// If the token is not restricted, there is nothing to do
+	if te.NumUses == 0 {
+		return nil
+	}
+
+	// Decrement the count
+	te.NumUses -= 1
+
+	// Revoke the token if there are no remaining uses.
+	// XXX: There is a race condition here with parallel
+	// requests using the same token. This would require
+	// some global coordination to avoid, as we must ensure
+	// no requests using the same restricted token are handled
+	// in parallel.
+	if te.NumUses == 0 {
+		return ts.Revoke(te.ID)
+	}
+
+	// Marshal the entry
+	enc, err := json.Marshal(te)
+	if err != nil {
+		return fmt.Errorf("failed to encode entry: %v", err)
+	}
+
+	// Write under the primary ID
+	saltedId := ts.SaltID(te.ID)
 	path := lookupPrefix + saltedId
 	le := &logical.StorageEntry{Key: path, Value: enc}
 	if err := ts.view.Put(le); err != nil {
@@ -429,27 +475,52 @@ func (ts *TokenStore) handleCreate(
 		return logical.ErrorResponse("parent token lookup failed"), logical.ErrInvalidRequest
 	}
 
+	// A token with a restricted number of uses cannot create a new token
+	// otherwise it could escape the restriction count.
+	if parent.NumUses > 0 {
+		return logical.ErrorResponse("restricted use token cannot generate child tokens"),
+			logical.ErrInvalidRequest
+	}
+
 	// Check if the parent policy is root
 	isRoot := strListContains(parent.Policies, "root")
 
 	// Read and parse the fields
 	var data struct {
-		ID       string
-		Policies []string
-		Metadata map[string]string `mapstructure:"meta"`
-		NoParent bool              `mapstructure:"no_parent"`
-		Lease    string
+		ID          string
+		Policies    []string
+		Metadata    map[string]string `mapstructure:"meta"`
+		NoParent    bool              `mapstructure:"no_parent"`
+		Lease       string
+		DisplayName string `mapstructure:"display_name"`
+		NumUses     int    `mapstructure:"num_uses"`
 	}
 	if err := mapstructure.WeakDecode(req.Data, &data); err != nil {
 		return logical.ErrorResponse(fmt.Sprintf(
 			"Error decoding request: %s", err)), logical.ErrInvalidRequest
 	}
 
+	// Verify the number of uses is positive
+	if data.NumUses < 0 {
+		return logical.ErrorResponse("number of uses cannot be negative"),
+			logical.ErrInvalidRequest
+	}
+
 	// Setup the token entry
 	te := TokenEntry{
-		Parent: req.ClientToken,
-		Path:   "auth/token/create",
-		Meta:   data.Metadata,
+		Parent:      req.ClientToken,
+		Path:        "auth/token/create",
+		Meta:        data.Metadata,
+		DisplayName: "token",
+		NumUses:     data.NumUses,
+	}
+
+	// Attach the given display name if any
+	if data.DisplayName != "" {
+		full := "token-" + data.DisplayName
+		full = displayNameSanitize.ReplaceAllString(full, "-")
+		full = strings.TrimSuffix(full, "-")
+		te.DisplayName = full
 	}
 
 	// Allow specifying the ID of the token if the client is root
@@ -592,10 +663,12 @@ func (ts *TokenStore) handleLookup(
 	// you could escalade your privileges.
 	resp := &logical.Response{
 		Data: map[string]interface{}{
-			"id":       out.ID,
-			"policies": out.Policies,
-			"path":     out.Path,
-			"meta":     out.Meta,
+			"id":           out.ID,
+			"policies":     out.Policies,
+			"path":         out.Path,
+			"meta":         out.Meta,
+			"display_name": out.DisplayName,
+			"num_uses":     out.NumUses,
 		},
 	}
 	return resp, nil

@@ -22,11 +22,15 @@ func TestLoadConfigFile(t *testing.T) {
 		},
 
 		Backend: &Backend{
-			Type: "consul",
+			Type:          "consul",
+			AdvertiseAddr: "foo",
 			Config: map[string]string{
 				"foo": "bar",
 			},
 		},
+
+		StatsiteAddr: "foo",
+		StatsdAddr:   "bar",
 	}
 	if !reflect.DeepEqual(config, expected) {
 		t.Fatalf("bad: %#v", config)

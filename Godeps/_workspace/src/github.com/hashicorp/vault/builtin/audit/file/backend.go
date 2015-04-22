@@ -35,8 +35,8 @@ func (b *Backend) LogRequest(auth *logical.Auth, req *logical.Request) error {
 		return err
 	}
 
-	// TODO
-	return nil
+	var format audit.FormatJSON
+	return format.FormatRequest(b.f, auth, req)
 }
 
 func (b *Backend) LogResponse(
@@ -48,8 +48,8 @@ func (b *Backend) LogResponse(
 		return err
 	}
 
-	// TODO
-	return nil
+	var format audit.FormatJSON
+	return format.FormatResponse(b.f, auth, req, resp, err)
 }
 
 func (b *Backend) open() error {
@@ -58,7 +58,7 @@ func (b *Backend) open() error {
 	}
 
 	var err error
-	b.f, err = os.Create(b.Path)
+	b.f, err = os.OpenFile(b.Path, os.O_APPEND|os.O_WRONLY, 0600)
 	if err != nil {
 		return err
 	}

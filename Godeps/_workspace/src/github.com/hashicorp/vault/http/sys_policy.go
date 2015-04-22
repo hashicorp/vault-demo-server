@@ -15,7 +15,7 @@ func handleSysListPolicies(core *vault.Core) http.Handler {
 			return
 		}
 
-		resp, ok := request(core, w, requestAuth(r, &logical.Request{
+		resp, ok := request(core, w, r, requestAuth(r, &logical.Request{
 			Operation: logical.ReadOperation,
 			Path:      "sys/policy",
 		}))
@@ -64,7 +64,7 @@ func handleSysDeletePolicy(core *vault.Core, w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	_, ok := request(core, w, requestAuth(r, &logical.Request{
+	_, ok := request(core, w, r, requestAuth(r, &logical.Request{
 		Operation: logical.DeleteOperation,
 		Path:      "sys/policy/" + path,
 	}))
@@ -88,11 +88,15 @@ func handleSysReadPolicy(core *vault.Core, w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	resp, ok := request(core, w, requestAuth(r, &logical.Request{
+	resp, ok := request(core, w, r, requestAuth(r, &logical.Request{
 		Operation: logical.ReadOperation,
 		Path:      "sys/policy/" + path,
 	}))
 	if !ok {
+		return
+	}
+	if resp == nil {
+		respondError(w, http.StatusNotFound, nil)
 		return
 	}
 
@@ -119,7 +123,7 @@ func handleSysWritePolicy(core *vault.Core, w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	_, ok := request(core, w, requestAuth(r, &logical.Request{
+	_, ok := request(core, w, r, requestAuth(r, &logical.Request{
 		Operation: logical.WriteOperation,
 		Path:      "sys/policy/" + path,
 		Data: map[string]interface{}{

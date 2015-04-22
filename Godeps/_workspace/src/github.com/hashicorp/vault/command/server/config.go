@@ -14,8 +14,11 @@ import (
 
 // Config is the configuration for the vault server.
 type Config struct {
-	Listeners []*Listener
-	Backend   *Backend
+	Listeners []*Listener `hcl:"-"`
+	Backend   *Backend    `hcl:"-"`
+
+	StatsiteAddr string `hcl:"statsite_addr"`
+	StatsdAddr   string `hcl:"statsd_addr"`
 }
 
 // DevConfig is a Config that is used for dev mode of Vault.
@@ -48,8 +51,9 @@ func (l *Listener) GoString() string {
 
 // Backend is the backend configuration for the server.
 type Backend struct {
-	Type   string
-	Config map[string]string
+	Type          string
+	AdvertiseAddr string
+	Config        map[string]string
 }
 
 func (b *Backend) GoString() string {
@@ -69,6 +73,13 @@ func (c *Config) Merge(c2 *Config) *Config {
 	result.Backend = c.Backend
 	if c2.Backend != nil {
 		result.Backend = c2.Backend
+	}
+
+	if c2.StatsiteAddr != "" {
+		result.StatsiteAddr = c2.StatsiteAddr
+	}
+	if c2.StatsdAddr != "" {
+		result.StatsdAddr = c2.StatsdAddr
 	}
 
 	return result
@@ -105,6 +116,10 @@ func LoadConfigFile(path string) (*Config, error) {
 
 	// Start building the result
 	var result Config
+	if err := hcl.DecodeObject(&result, obj); err != nil {
+		return nil, err
+	}
+
 	if objs := obj.Get("listener", false); objs != nil {
 		result.Listeners, err = loadListeners(objs)
 		if err != nil {
@@ -291,6 +306,11 @@ func loadBackend(os *hclobj.Object) (*Backend, error) {
 			"Error reading config for backend %s: %s",
 			result.Type,
 			err)
+	}
+
+	if v, ok := config["advertise_addr"]; ok {
+		result.AdvertiseAddr = v
+		delete(config, "advertise_addr")
 	}
 
 	result.Config = config

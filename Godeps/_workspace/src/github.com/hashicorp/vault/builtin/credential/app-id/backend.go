@@ -12,11 +12,36 @@ func Factory(map[string]string) (logical.Backend, error) {
 func Backend() *framework.Backend {
 	var b backend
 	b.MapAppId = &framework.PolicyMap{
-		PathMap:    &framework.PathMap{"app-id"},
+		PathMap: framework.PathMap{
+			Name: "app-id",
+			Schema: map[string]*framework.FieldSchema{
+				"display_name": &framework.FieldSchema{
+					Type:        framework.TypeString,
+					Description: "A name to map to this app ID for logs.",
+				},
+
+				"value": &framework.FieldSchema{
+					Type:        framework.TypeString,
+					Description: "Policies for the app ID.",
+				},
+			},
+		},
 		DefaultKey: "default",
 	}
+
 	b.MapUserId = &framework.PathMap{
 		Name: "user-id",
+		Schema: map[string]*framework.FieldSchema{
+			"cidr_block": &framework.FieldSchema{
+				Type:        framework.TypeString,
+				Description: "If not blank, restricts auth by this CIDR block",
+			},
+
+			"value": &framework.FieldSchema{
+				Type:        framework.TypeString,
+				Description: "App IDs that this user associates with.",
+			},
+		},
 	}
 
 	b.Backend = &framework.Backend{

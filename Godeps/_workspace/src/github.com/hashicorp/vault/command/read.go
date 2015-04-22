@@ -45,7 +45,16 @@ func (c *ReadCommand) Run(args []string) int {
 			"Error reading %s: %s", path, err))
 		return 1
 	}
+	if secret == nil {
+		c.Ui.Error(fmt.Sprintf(
+			"No value found at %s", path))
+		return 1
+	}
 
+	return c.output(format, secret)
+}
+
+func (c *ReadCommand) output(format string, secret *api.Secret) int {
 	switch format {
 	case "json":
 		return c.formatJSON(secret)
@@ -54,8 +63,6 @@ func (c *ReadCommand) Run(args []string) int {
 	default:
 		return c.formatTable(secret, true)
 	}
-
-	return 0
 }
 
 func (c *ReadCommand) formatJSON(s *api.Secret) int {
@@ -81,8 +88,10 @@ func (c *ReadCommand) formatTable(s *api.Secret, whitespace bool) int {
 	input := make([]string, 0, 5)
 	input = append(input, fmt.Sprintf("Key %s Value", config.Delim))
 
-	if s.LeaseID != "" {
+	if s.LeaseID != "" && s.LeaseDuration > 0 {
 		input = append(input, fmt.Sprintf("lease_id %s %s", config.Delim, s.LeaseID))
+		input = append(input, fmt.Sprintf(
+			"lease_duration %s %d", config.Delim, s.LeaseDuration))
 	}
 
 	for k, v := range s.Data {

@@ -25,15 +25,21 @@ func (c *TokenAuth) Create(opts *TokenCreateRequest) (*Secret, error) {
 	return ParseSecret(resp.Body)
 }
 
-func (c *TokenAuth) Renew(token string) error {
+func (c *TokenAuth) Renew(token string, increment int) (*Secret, error) {
 	r := c.c.NewRequest("PUT", "/v1/auth/token/renew/"+token)
+
+	body := map[string]interface{}{"increment": increment}
+	if err := r.SetJSONBody(body); err != nil {
+		return nil, err
+	}
+
 	resp, err := c.c.RawRequest(r)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer resp.Body.Close()
 
-	return nil
+	return ParseSecret(resp.Body)
 }
 
 func (c *TokenAuth) RevokeOrphan(token string) error {
@@ -71,9 +77,11 @@ func (c *TokenAuth) RevokeTree(token string) error {
 
 // TokenCreateRequest is the options structure for creating a token.
 type TokenCreateRequest struct {
-	ID       string            `json:"id,omitempty"`
-	Policies []string          `json:"policies,omitempty"`
-	Metadata map[string]string `json:"meta,omitempty"`
-	Lease    string            `json:"lease,omitempty"`
-	NoParent bool              `json:"no_parent,omitempty"`
+	ID          string            `json:"id,omitempty"`
+	Policies    []string          `json:"policies,omitempty"`
+	Metadata    map[string]string `json:"meta,omitempty"`
+	Lease       string            `json:"lease,omitempty"`
+	NoParent    bool              `json:"no_parent,omitempty"`
+	DisplayName string            `json:"display_name"`
+	NumUses     int               `json:"num_uses"`
 }

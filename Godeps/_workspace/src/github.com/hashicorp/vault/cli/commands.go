@@ -7,9 +7,12 @@ import (
 
 	credAppId "github.com/hashicorp/vault/builtin/credential/app-id"
 	credGitHub "github.com/hashicorp/vault/builtin/credential/github"
+	credUserpass "github.com/hashicorp/vault/builtin/credential/userpass"
 
 	"github.com/hashicorp/vault/builtin/logical/aws"
 	"github.com/hashicorp/vault/builtin/logical/consul"
+	"github.com/hashicorp/vault/builtin/logical/postgresql"
+	"github.com/hashicorp/vault/builtin/logical/transit"
 
 	"github.com/hashicorp/vault/audit"
 	tokenDisk "github.com/hashicorp/vault/builtin/token/disk"
@@ -47,12 +50,15 @@ func Commands(metaPtr *command.Meta) map[string]cli.CommandFactory {
 					"file": auditFile.Factory,
 				},
 				CredentialBackends: map[string]logical.Factory{
-					"app-id": credAppId.Factory,
-					"github": credGitHub.Factory,
+					"app-id":   credAppId.Factory,
+					"github":   credGitHub.Factory,
+					"userpass": credUserpass.Factory,
 				},
 				LogicalBackends: map[string]logical.Factory{
-					"aws":    aws.Factory,
-					"consul": consul.Factory,
+					"aws":        aws.Factory,
+					"consul":     consul.Factory,
+					"postgresql": postgresql.Factory,
+					"transit":    transit.Factory,
 				},
 			}, nil
 		},
@@ -67,7 +73,8 @@ func Commands(metaPtr *command.Meta) map[string]cli.CommandFactory {
 			return &command.AuthCommand{
 				Meta: meta,
 				Handlers: map[string]command.AuthHandler{
-					"github": &credGitHub.CLIHandler{},
+					"github":   &credGitHub.CLIHandler{},
+					"userpass": &credUserpass.CLIHandler{},
 				},
 			}, nil
 		},
@@ -108,6 +115,12 @@ func Commands(metaPtr *command.Meta) map[string]cli.CommandFactory {
 			}, nil
 		},
 
+		"policy-delete": func() (cli.Command, error) {
+			return &command.PolicyDeleteCommand{
+				Meta: meta,
+			}, nil
+		},
+
 		"policy-write": func() (cli.Command, error) {
 			return &command.PolicyWriteCommand{
 				Meta: meta,
@@ -132,6 +145,12 @@ func Commands(metaPtr *command.Meta) map[string]cli.CommandFactory {
 			}, nil
 		},
 
+		"renew": func() (cli.Command, error) {
+			return &command.RenewCommand{
+				Meta: meta,
+			}, nil
+		},
+
 		"revoke": func() (cli.Command, error) {
 			return &command.RevokeCommand{
 				Meta: meta,
@@ -144,8 +163,8 @@ func Commands(metaPtr *command.Meta) map[string]cli.CommandFactory {
 			}, nil
 		},
 
-		"seal-status": func() (cli.Command, error) {
-			return &command.SealStatusCommand{
+		"status": func() (cli.Command, error) {
+			return &command.StatusCommand{
 				Meta: meta,
 			}, nil
 		},
@@ -182,6 +201,12 @@ func Commands(metaPtr *command.Meta) map[string]cli.CommandFactory {
 
 		"token-create": func() (cli.Command, error) {
 			return &command.TokenCreateCommand{
+				Meta: meta,
+			}, nil
+		},
+
+		"token-renew": func() (cli.Command, error) {
+			return &command.TokenRenewCommand{
 				Meta: meta,
 			}, nil
 		},

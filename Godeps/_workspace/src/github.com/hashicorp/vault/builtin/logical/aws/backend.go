@@ -19,19 +19,20 @@ func Backend() *framework.Backend {
 
 		PathsSpecial: &logical.Paths{
 			Root: []string{
-				"root",
+				"config/*",
 				"policy/*",
 			},
 		},
 
 		Paths: []*framework.Path{
-			pathRoot(),
+			pathConfigRoot(),
+			pathConfigLease(&b),
 			pathPolicy(),
 			pathUser(&b),
 		},
 
 		Secrets: []*framework.Secret{
-			secretAccessKeys(),
+			secretAccessKeys(&b),
 		},
 
 		Rollback:       rollback,
