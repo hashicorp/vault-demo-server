@@ -20,7 +20,7 @@
 		},
 		{
 			"ImportPath": "github.com/gorilla/websocket",
-			"Rev": "2dbddebb8266b93c5e6b119efb54e89043186f3f"
+			"Rev": "ecff5aabe41f13b4cdf897e3c0c9bbccbe552a29"
 		},
 		{
 			"ImportPath": "github.com/hashicorp/aws-sdk-go/aws",
