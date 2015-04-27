@@ -33,6 +33,9 @@ type client struct {
 func NewClient() (*client, error) {
 	// Create the core, sealed and in-memory
 	core, err := vault.NewCore(&vault.CoreConfig{
+		// Heroku doesn't support mlock syscall
+		DisableMlock: true,
+
 		Physical: &Physical{
 			Backend: physical.NewInmem(),
 			Limit:   64000,
