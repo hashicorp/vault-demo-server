@@ -47,6 +47,7 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		log.Printf("[ERR] %s", err)
 		http.Error(w, "Internal error", 500)
+		return
 	}
 	defer vault.Close()
 
