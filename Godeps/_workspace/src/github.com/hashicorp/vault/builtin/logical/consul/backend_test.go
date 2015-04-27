@@ -2,6 +2,7 @@ package consul
 
 import (
 	"encoding/base64"
+	"fmt"
 	"io/ioutil"
 	"log"
 	"os"
@@ -27,6 +28,21 @@ func TestBackend_basic(t *testing.T) {
 			testAccStepConfig(t, config),
 			testAccStepWritePolicy(t, "test", testPolicy),
 			testAccStepReadToken(t, "test", config),
+		},
+	})
+}
+
+func TestBackend_crud(t *testing.T) {
+	_, process := testStartConsulServer(t)
+	defer testStopConsulServer(t, process)
+
+	logicaltest.Test(t, logicaltest.TestCase{
+		PreCheck: func() { testAccPreCheck(t) },
+		Backend:  Backend(),
+		Steps: []logicaltest.TestStep{
+			testAccStepWritePolicy(t, "test", testPolicy),
+			testAccStepReadPolicy(t, "test", testPolicy),
+			testAccStepDeletePolicy(t, "test"),
 		},
 	})
 }
@@ -93,7 +109,7 @@ func testAccStepReadToken(
 	t *testing.T, name string, conf map[string]interface{}) logicaltest.TestStep {
 	return logicaltest.TestStep{
 		Operation: logical.ReadOperation,
-		Path:      name,
+		Path:      "creds/" + name,
 		Check: func(resp *logical.Response) error {
 			var d struct {
 				Token string `mapstructure:"token"`
@@ -129,10 +145,35 @@ func testAccStepReadToken(
 func testAccStepWritePolicy(t *testing.T, name string, policy string) logicaltest.TestStep {
 	return logicaltest.TestStep{
 		Operation: logical.WriteOperation,
-		Path:      "policy/" + name,
+		Path:      "roles/" + name,
 		Data: map[string]interface{}{
 			"policy": base64.StdEncoding.EncodeToString([]byte(policy)),
 		},
+	}
+}
+
+func testAccStepReadPolicy(t *testing.T, name string, policy string) logicaltest.TestStep {
+	return logicaltest.TestStep{
+		Operation: logical.ReadOperation,
+		Path:      "roles/" + name,
+		Check: func(resp *logical.Response) error {
+			policyRaw := resp.Data["policy"].(string)
+			out, err := base64.StdEncoding.DecodeString(policyRaw)
+			if err != nil {
+				return err
+			}
+			if string(out) != policy {
+				return fmt.Errorf("mismatch: %s %s", out, policy)
+			}
+			return nil
+		},
+	}
+}
+
+func testAccStepDeletePolicy(t *testing.T, name string) logicaltest.TestStep {
+	return logicaltest.TestStep{
+		Operation: logical.DeleteOperation,
+		Path:      "roles/" + name,
 	}
 }
 

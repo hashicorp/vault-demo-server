@@ -4,13 +4,16 @@ import (
 	"os"
 
 	auditFile "github.com/hashicorp/vault/builtin/audit/file"
+	auditSyslog "github.com/hashicorp/vault/builtin/audit/syslog"
 
 	credAppId "github.com/hashicorp/vault/builtin/credential/app-id"
+	credCert "github.com/hashicorp/vault/builtin/credential/cert"
 	credGitHub "github.com/hashicorp/vault/builtin/credential/github"
 	credUserpass "github.com/hashicorp/vault/builtin/credential/userpass"
 
 	"github.com/hashicorp/vault/builtin/logical/aws"
 	"github.com/hashicorp/vault/builtin/logical/consul"
+	"github.com/hashicorp/vault/builtin/logical/mysql"
 	"github.com/hashicorp/vault/builtin/logical/postgresql"
 	"github.com/hashicorp/vault/builtin/logical/transit"
 
@@ -47,9 +50,11 @@ func Commands(metaPtr *command.Meta) map[string]cli.CommandFactory {
 			return &command.ServerCommand{
 				Meta: meta,
 				AuditBackends: map[string]audit.Factory{
-					"file": auditFile.Factory,
+					"file":   auditFile.Factory,
+					"syslog": auditSyslog.Factory,
 				},
 				CredentialBackends: map[string]logical.Factory{
+					"cert":     credCert.Factory,
 					"app-id":   credAppId.Factory,
 					"github":   credGitHub.Factory,
 					"userpass": credUserpass.Factory,
@@ -59,6 +64,7 @@ func Commands(metaPtr *command.Meta) map[string]cli.CommandFactory {
 					"consul":     consul.Factory,
 					"postgresql": postgresql.Factory,
 					"transit":    transit.Factory,
+					"mysql":      mysql.Factory,
 				},
 			}, nil
 		},

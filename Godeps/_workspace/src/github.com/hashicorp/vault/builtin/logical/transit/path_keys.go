@@ -45,13 +45,13 @@ func getPolicy(req *logical.Request, name string) (*Policy, error) {
 	return p, nil
 }
 
-func pathPolicy() *framework.Path {
+func pathKeys() *framework.Path {
 	return &framework.Path{
-		Pattern: `policy/(?P<name>\w+)`,
+		Pattern: `keys/(?P<name>\w+)`,
 		Fields: map[string]*framework.FieldSchema{
 			"name": &framework.FieldSchema{
 				Type:        framework.TypeString,
-				Description: "Name of the policy",
+				Description: "Name of the key",
 			},
 		},
 
@@ -60,6 +60,9 @@ func pathPolicy() *framework.Path {
 			logical.DeleteOperation: pathPolicyDelete,
 			logical.ReadOperation:   pathPolicyRead,
 		},
+
+		HelpSynopsis:    pathPolicyHelpSyn,
+		HelpDescription: pathPolicyHelpDesc,
 	}
 }
 
@@ -138,3 +141,11 @@ func pathPolicyDelete(
 	}
 	return nil, nil
 }
+
+const pathPolicyHelpSyn = `Managed named encrption keys`
+
+const pathPolicyHelpDesc = `
+This path is used to manage the named keys that are available.
+Doing a write with no value against a new named key will create
+it using a randomly generated key.
+`

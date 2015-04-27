@@ -11,6 +11,11 @@
 			"Rev": "0bab926c3433cfd6490c6d3c504a7b471362390c"
 		},
 		{
+			"ImportPath": "github.com/go-sql-driver/mysql",
+			"Comment": "v1.2-88-ga197e5d",
+			"Rev": "a197e5d40516f2e9f74dcee085a5f2d4604e94df"
+		},
+		{
 			"ImportPath": "github.com/google/go-github/github",
 			"Rev": "0aaa85be4f3087c6dd815a69e291775d4e83f9ea"
 		},
@@ -20,7 +25,7 @@
 		},
 		{
 			"ImportPath": "github.com/gorilla/websocket",
-			"Rev": "ecff5aabe41f13b4cdf897e3c0c9bbccbe552a29"
+			"Rev": "2dbddebb8266b93c5e6b119efb54e89043186f3f"
 		},
 		{
 			"ImportPath": "github.com/hashicorp/aws-sdk-go/aws",
@@ -39,8 +44,8 @@
 		},
 		{
 			"ImportPath": "github.com/hashicorp/consul/api",
-			"Comment": "v0.5.0-176-gc1424cf",
-			"Rev": "c1424cf6efd582250856a5926f815c7e93884758"
+			"Comment": "v0.5.0-199-g205af6b",
+			"Rev": "205af6ba750b88863e6ee50c7c3d19edc180a6f6"
 		},
 		{
 			"ImportPath": "github.com/hashicorp/errwrap",
@@ -49,6 +54,10 @@
 		{
 			"ImportPath": "github.com/hashicorp/go-multierror",
 			"Rev": "fcdddc395df1ddf4247c69bd436e84cfa0733f7e"
+		},
+		{
+			"ImportPath": "github.com/hashicorp/go-syslog",
+			"Rev": "42a2b573b664dbf281bd48c3cc12c086b17a39ba"
 		},
 		{
 			"ImportPath": "github.com/hashicorp/golang-lru",
@@ -64,95 +73,107 @@
 		},
 		{
 			"ImportPath": "github.com/hashicorp/vault/api",
-			"Rev": "e5facee87d75492e5b5a6991f2f84c2f3439105b"
+			"Rev": "8e529b8ace1d1f914fa7d9018eab34609ef07bdc"
 		},
 		{
 			"ImportPath": "github.com/hashicorp/vault/audit",
-			"Rev": "e5facee87d75492e5b5a6991f2f84c2f3439105b"
+			"Rev": "8e529b8ace1d1f914fa7d9018eab34609ef07bdc"
 		},
 		{
 			"ImportPath": "github.com/hashicorp/vault/builtin/audit/file",
-			"Rev": "e5facee87d75492e5b5a6991f2f84c2f3439105b"
+			"Rev": "8e529b8ace1d1f914fa7d9018eab34609ef07bdc"
+		},
+		{
+			"ImportPath": "github.com/hashicorp/vault/builtin/audit/syslog",
+			"Rev": "8e529b8ace1d1f914fa7d9018eab34609ef07bdc"
 		},
 		{
 			"ImportPath": "github.com/hashicorp/vault/builtin/credential/app-id",
-			"Rev": "e5facee87d75492e5b5a6991f2f84c2f3439105b"
+			"Rev": "8e529b8ace1d1f914fa7d9018eab34609ef07bdc"
+		},
+		{
+			"ImportPath": "github.com/hashicorp/vault/builtin/credential/cert",
+			"Rev": "8e529b8ace1d1f914fa7d9018eab34609ef07bdc"
 		},
 		{
 			"ImportPath": "github.com/hashicorp/vault/builtin/credential/github",
-			"Rev": "e5facee87d75492e5b5a6991f2f84c2f3439105b"
+			"Rev": "8e529b8ace1d1f914fa7d9018eab34609ef07bdc"
 		},
 		{
 			"ImportPath": "github.com/hashicorp/vault/builtin/credential/userpass",
-			"Rev": "e5facee87d75492e5b5a6991f2f84c2f3439105b"
+			"Rev": "8e529b8ace1d1f914fa7d9018eab34609ef07bdc"
 		},
 		{
 			"ImportPath": "github.com/hashicorp/vault/builtin/logical/aws",
-			"Rev": "e5facee87d75492e5b5a6991f2f84c2f3439105b"
+			"Rev": "8e529b8ace1d1f914fa7d9018eab34609ef07bdc"
 		},
 		{
 			"ImportPath": "github.com/hashicorp/vault/builtin/logical/consul",
-			"Rev": "e5facee87d75492e5b5a6991f2f84c2f3439105b"
+			"Rev": "8e529b8ace1d1f914fa7d9018eab34609ef07bdc"
+		},
+		{
+			"ImportPath": "github.com/hashicorp/vault/builtin/logical/mysql",
+			"Rev": "8e529b8ace1d1f914fa7d9018eab34609ef07bdc"
 		},
 		{
 			"ImportPath": "github.com/hashicorp/vault/builtin/logical/postgresql",
-			"Rev": "e5facee87d75492e5b5a6991f2f84c2f3439105b"
+			"Rev": "8e529b8ace1d1f914fa7d9018eab34609ef07bdc"
 		},
 		{
 			"ImportPath": "github.com/hashicorp/vault/builtin/logical/transit",
-			"Rev": "e5facee87d75492e5b5a6991f2f84c2f3439105b"
+			"Rev": "8e529b8ace1d1f914fa7d9018eab34609ef07bdc"
 		},
 		{
 			"ImportPath": "github.com/hashicorp/vault/builtin/token/disk",
-			"Rev": "e5facee87d75492e5b5a6991f2f84c2f3439105b"
+			"Rev": "8e529b8ace1d1f914fa7d9018eab34609ef07bdc"
 		},
 		{
 			"ImportPath": "github.com/hashicorp/vault/cli",
-			"Rev": "e5facee87d75492e5b5a6991f2f84c2f3439105b"
+			"Rev": "8e529b8ace1d1f914fa7d9018eab34609ef07bdc"
 		},
 		{
 			"ImportPath": "github.com/hashicorp/vault/command",
-			"Rev": "e5facee87d75492e5b5a6991f2f84c2f3439105b"
+			"Rev": "8e529b8ace1d1f914fa7d9018eab34609ef07bdc"
 		},
 		{
 			"ImportPath": "github.com/hashicorp/vault/helper/flag-kv",
-			"Rev": "e5facee87d75492e5b5a6991f2f84c2f3439105b"
+			"Rev": "8e529b8ace1d1f914fa7d9018eab34609ef07bdc"
 		},
 		{
 			"ImportPath": "github.com/hashicorp/vault/helper/flag-slice",
-			"Rev": "e5facee87d75492e5b5a6991f2f84c2f3439105b"
+			"Rev": "8e529b8ace1d1f914fa7d9018eab34609ef07bdc"
 		},
 		{
 			"ImportPath": "github.com/hashicorp/vault/helper/gated-writer",
-			"Rev": "e5facee87d75492e5b5a6991f2f84c2f3439105b"
+			"Rev": "8e529b8ace1d1f914fa7d9018eab34609ef07bdc"
 		},
 		{
 			"ImportPath": "github.com/hashicorp/vault/helper/kv-builder",
-			"Rev": "e5facee87d75492e5b5a6991f2f84c2f3439105b"
+			"Rev": "8e529b8ace1d1f914fa7d9018eab34609ef07bdc"
 		},
 		{
 			"ImportPath": "github.com/hashicorp/vault/helper/password",
-			"Rev": "e5facee87d75492e5b5a6991f2f84c2f3439105b"
+			"Rev": "8e529b8ace1d1f914fa7d9018eab34609ef07bdc"
 		},
 		{
 			"ImportPath": "github.com/hashicorp/vault/http",
-			"Rev": "e5facee87d75492e5b5a6991f2f84c2f3439105b"
+			"Rev": "8e529b8ace1d1f914fa7d9018eab34609ef07bdc"
 		},
 		{
 			"ImportPath": "github.com/hashicorp/vault/logical",
-			"Rev": "e5facee87d75492e5b5a6991f2f84c2f3439105b"
+			"Rev": "8e529b8ace1d1f914fa7d9018eab34609ef07bdc"
 		},
 		{
 			"ImportPath": "github.com/hashicorp/vault/physical",
-			"Rev": "e5facee87d75492e5b5a6991f2f84c2f3439105b"
+			"Rev": "8e529b8ace1d1f914fa7d9018eab34609ef07bdc"
 		},
 		{
 			"ImportPath": "github.com/hashicorp/vault/shamir",
-			"Rev": "e5facee87d75492e5b5a6991f2f84c2f3439105b"
+			"Rev": "8e529b8ace1d1f914fa7d9018eab34609ef07bdc"
 		},
 		{
 			"ImportPath": "github.com/hashicorp/vault/vault",
-			"Rev": "e5facee87d75492e5b5a6991f2f84c2f3439105b"
+			"Rev": "8e529b8ace1d1f914fa7d9018eab34609ef07bdc"
 		},
 		{
 			"ImportPath": "github.com/lib/pq",
@@ -169,7 +190,7 @@
 		},
 		{
 			"ImportPath": "github.com/mitchellh/copystructure",
-			"Rev": "c101d94abf8cd5c6213c8300d0aed6368f2d6ede"
+			"Rev": "6fc66267e9da7d155a9d3bd489e00dad02666dc6"
 		},
 		{
 			"ImportPath": "github.com/mitchellh/go-homedir",
@@ -185,7 +206,7 @@
 		},
 		{
 			"ImportPath": "github.com/mitchellh/reflectwalk",
-			"Rev": "9cdd861463675960a0a0083a7e2023e7b0c994d7"
+			"Rev": "242be0c275dedfba00a616563e6db75ab8f279ec"
 		},
 		{
 			"ImportPath": "github.com/ryanuber/columnize",
@@ -202,11 +223,11 @@
 		},
 		{
 			"ImportPath": "golang.org/x/net/context",
-			"Rev": "4977ec316d25d824a5da6df00ef57ae03833166c"
+			"Rev": "ff8eb9a34a5cbb9941ffc6f84a19a8014c2646ad"
 		},
 		{
 			"ImportPath": "golang.org/x/oauth2",
-			"Rev": "23f31c341b9ede4693ea642df2d2bd3c03c3bd8b"
+			"Rev": "ec6d5d770f531108a6464462b2201b74fcd09314"
 		}
 	]
 }

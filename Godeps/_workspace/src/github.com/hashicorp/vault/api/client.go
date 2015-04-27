@@ -6,10 +6,11 @@ import (
 	"net/http"
 	"net/http/cookiejar"
 	"net/url"
+	"os"
 	"time"
-
-	vaultHttp "github.com/hashicorp/vault/http"
 )
+
+const AuthCookieName = "token"
 
 var (
 	errRedirect = errors.New("redirect")
@@ -33,10 +34,17 @@ type Config struct {
 
 // DefaultConfig returns a default configuration for the client. It is
 // safe to modify the return value of this function.
-func DefaultConfig() Config {
-	config := Config{
+//
+// The default Address is https://127.0.0.1:8200, but this can be overridden by
+// setting the `VAULT_ADDR` environment variable.
+func DefaultConfig() *Config {
+	config := &Config{
 		Address:    "https://127.0.0.1:8200",
 		HttpClient: &http.Client{},
+	}
+
+	if addr := os.Getenv("VAULT_ADDR"); addr != "" {
+		config.Address = addr
 	}
 
 	return config
@@ -46,11 +54,15 @@ func DefaultConfig() Config {
 // NewClient.
 type Client struct {
 	addr   *url.URL
-	config Config
+	config *Config
 }
 
 // NewClient returns a new client for the given configuration.
-func NewClient(c Config) (*Client, error) {
+//
+// If the environment variable `VAULT_TOKEN` is present, the token will be
+// automatically added to the client. Otherwise, you must manually call
+// `SetToken()`.
+func NewClient(c *Config) (*Client, error) {
 	u, err := url.Parse(c.Address)
 	if err != nil {
 		return nil, err
@@ -75,10 +87,16 @@ func NewClient(c Config) (*Client, error) {
 		return errRedirect
 	}
 
-	return &Client{
+	client := &Client{
 		addr:   u,
 		config: c,
-	}, nil
+	}
+
+	if token := os.Getenv("VAULT_TOKEN"); token != "" {
+		client.SetToken(token)
+	}
+
+	return client, nil
 }
 
 // Token returns the access token being used by this client. It will
@@ -86,7 +104,7 @@ func NewClient(c Config) (*Client, error) {
 func (c *Client) Token() string {
 	r := c.NewRequest("GET", "/")
 	for _, cookie := range c.config.HttpClient.Jar.Cookies(r.URL) {
-		if cookie.Name == vaultHttp.AuthCookieName {
+		if cookie.Name == AuthCookieName {
 			return cookie.Value
 		}
 	}
@@ -100,7 +118,7 @@ func (c *Client) SetToken(v string) {
 	r := c.NewRequest("GET", "/")
 	c.config.HttpClient.Jar.SetCookies(r.URL, []*http.Cookie{
 		&http.Cookie{
-			Name:    vaultHttp.AuthCookieName,
+			Name:    AuthCookieName,
 			Value:   v,
 			Path:    "/",
 			Expires: time.Now().Add(365 * 24 * time.Hour),
@@ -113,7 +131,7 @@ func (c *Client) ClearToken() {
 	r := c.NewRequest("GET", "/")
 	c.config.HttpClient.Jar.SetCookies(r.URL, []*http.Cookie{
 		&http.Cookie{
-			Name:    vaultHttp.AuthCookieName,
+			Name:    AuthCookieName,
 			Value:   "",
 			Expires: time.Now().Add(-1 * time.Hour),
 		},

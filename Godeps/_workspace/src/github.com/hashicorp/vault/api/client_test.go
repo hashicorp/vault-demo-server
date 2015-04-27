@@ -4,17 +4,44 @@ import (
 	"bytes"
 	"io"
 	"net/http"
+	"os"
 	"testing"
 	"time"
-
-	vaultHttp "github.com/hashicorp/vault/http"
 )
+
+func init() {
+	// Ensure our special envvars are not present
+	os.Setenv("VAULT_ADDR", "")
+	os.Setenv("VAULT_TOKEN", "")
+}
+
+func TestDefaultConfig_envvar(t *testing.T) {
+	os.Setenv("VAULT_ADDR", "https://vault.mycompany.com")
+	defer os.Setenv("VAULT_ADDR", "")
+
+	config := DefaultConfig()
+	if config.Address != "https://vault.mycompany.com" {
+		t.Fatalf("bad: %s", config.Address)
+	}
+
+	os.Setenv("VAULT_TOKEN", "testing")
+	defer os.Setenv("VAULT_TOKEN", "")
+
+	client, err := NewClient(config)
+	if err != nil {
+		t.Fatalf("err: %s", err)
+	}
+
+	if token := client.Token(); token != "testing" {
+		t.Fatalf("bad: %s", token)
+	}
+}
 
 func TestClientToken(t *testing.T) {
 	tokenValue := "foo"
 	handler := func(w http.ResponseWriter, req *http.Request) {
 		http.SetCookie(w, &http.Cookie{
-			Name:    vaultHttp.AuthCookieName,
+			Name:    AuthCookieName,
 			Value:   tokenValue,
 			Expires: time.Now().Add(time.Hour),
 		})
@@ -53,7 +80,7 @@ func TestClientToken(t *testing.T) {
 func TestClientSetToken(t *testing.T) {
 	var tokenValue string
 	handler := func(w http.ResponseWriter, req *http.Request) {
-		cookie, err := req.Cookie(vaultHttp.AuthCookieName)
+		cookie, err := req.Cookie(AuthCookieName)
 		if err != nil {
 			t.Fatalf("err: %s", err)
 		}
@@ -99,7 +126,7 @@ func TestClientSetToken(t *testing.T) {
 
 func TestClientRedirect(t *testing.T) {
 	primary := func(w http.ResponseWriter, req *http.Request) {
-		cookie, err := req.Cookie(vaultHttp.AuthCookieName)
+		cookie, err := req.Cookie(AuthCookieName)
 		if err != nil {
 			t.Fatalf("err: %s", err)
 		}

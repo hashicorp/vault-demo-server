@@ -8,20 +8,6 @@ import (
 	"reflect"
 )
 
-type Location uint
-
-const (
-	None Location = iota
-	Map
-	MapKey
-	MapValue
-	Slice
-	SliceElem
-	Struct
-	StructField
-	WalkLoc
-)
-
 // PrimitiveWalker implementations are able to handle primitive values
 // within complex structures. Primitive values are numbers, strings,
 // booleans, funcs, chans.
@@ -136,6 +122,8 @@ func walk(v reflect.Value, w interface{}) (err error) {
 	case reflect.Int:
 		fallthrough
 	case reflect.String:
+		fallthrough
+	case reflect.Invalid:
 		err = walkPrimitive(originalV, w)
 		return
 	case reflect.Map:
@@ -147,14 +135,6 @@ func walk(v reflect.Value, w interface{}) (err error) {
 	case reflect.Struct:
 		err = walkStruct(v, w)
 		return
-	case reflect.Invalid:
-		// If the original kind was an interface, just let it through.
-		if originalV.Kind() == reflect.Interface {
-			err = walkPrimitive(originalV, w)
-			return
-		}
-
-		fallthrough
 	default:
 		panic("unsupported type: " + k.String())
 	}

@@ -20,14 +20,13 @@ func Backend() *framework.Backend {
 		PathsSpecial: &logical.Paths{
 			Root: []string{
 				"config/*",
-				"policy/*",
 			},
 		},
 
 		Paths: []*framework.Path{
 			pathConfigRoot(),
 			pathConfigLease(&b),
-			pathPolicy(),
+			pathRoles(),
 			pathUser(&b),
 		},
 
@@ -53,5 +52,5 @@ are automatically revoked at the end of the lease.
 
 After mounting this backend, credentials to generate IAM keys must
 be configured with the "root" path and policies must be written using
-the "policy/" endpoints before any access keys can be generated.
+the "roles/" endpoints before any access keys can be generated.
 `
