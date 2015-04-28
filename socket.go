@@ -11,7 +11,12 @@ import (
 
 // The message types that can be sent in the JSON
 const (
+	// MessageTypeCLI is the message type for executing CLI commands
 	MessageTypeCLI = "cli"
+
+	// MessageTypePing is a ping that just keeps the connection alive
+	// since JavaScript can't send a WebSocket ping.
+	MessageTypePing = "ping"
 )
 
 // wsUpgrader is the upgrader we're using.
@@ -68,6 +73,8 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		switch message.Type {
 		case MessageTypeCLI:
 			handler = messageCLI(ws, vault)
+		case MessageTypePing:
+			// Do nothing
 		default:
 			http.Error(
 				w,
