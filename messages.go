@@ -71,5 +71,5 @@ type messageCLIResponse struct {
 }
 
 type messagePingResponse struct {
-	Pong bool
+	Pong bool `json:"pong"`
 }
