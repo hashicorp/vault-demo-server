@@ -74,7 +74,7 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		case MessageTypeCLI:
 			handler = messageCLI(ws, vault)
 		case MessageTypePing:
-			// Do nothing
+			handler = messagePing(ws, vault)
 		default:
 			http.Error(
 				w,

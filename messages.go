@@ -52,6 +52,14 @@ func messageCLI(ws *websocket.Conn, vault *client) MessageHandler {
 	}
 }
 
+func messagePing(ws *websocket.Conn, vault *client) MessageHandler {
+	return func(data map[string]interface{}) error {
+		return ws.WriteJSON(&messagePingResponse{
+			Pong: true,
+		})
+	}
+}
+
 type messageCLIRequest struct {
 	Command string `mapstructure:"command"`
 }
@@ -60,4 +68,8 @@ type messageCLIResponse struct {
 	ExitCode int    `json:"exit_code"`
 	Stdout   string `json:"stdout"`
 	Stderr   string `json:"stderr"`
+}
+
+type messagePingResponse struct {
+	Pong bool
 }
