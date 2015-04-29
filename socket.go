@@ -5,6 +5,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"time"
 
 	"github.com/gorilla/websocket"
 )
@@ -58,6 +59,11 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request) {
 
 	// Handle each message
 	for {
+		// Set a timeout
+		ws.SetReadDeadline(time.Now().UTC().Add(1 * time.Minute))
+
+		// Read the next message. This will block until there is a message
+		// or until there is a timeout from above.
 		var message wsMessage
 		if err := ws.ReadJSON(&message); err != nil {
 			if err != io.EOF {
