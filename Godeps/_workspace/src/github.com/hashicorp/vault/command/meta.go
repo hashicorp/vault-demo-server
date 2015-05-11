@@ -3,11 +3,17 @@ package command
 import (
 	"bufio"
 	"crypto/tls"
+	"crypto/x509"
+	"encoding/pem"
 	"flag"
+	"fmt"
 	"io"
+	"io/ioutil"
 	"net"
 	"net/http"
 	"os"
+	"path/filepath"
+	"strconv"
 	"time"
 
 	"github.com/hashicorp/vault/api"
@@ -17,6 +23,9 @@ import (
 
 // EnvVaultAddress can be used to set the address of Vault
 const EnvVaultAddress = "VAULT_ADDR"
+const EnvVaultCACert = "VAULT_CACERT"
+const EnvVaultCAPath = "VAULT_CAPATH"
+const EnvVaultInsecure = "VAULT_SKIP_VERIFY"
 
 // FlagSetFlags is an enum to define what flags are present in the
 // default FlagSet returned by Meta.FlagSet.
@@ -62,15 +71,37 @@ func (m *Meta) Client() (*api.Client, error) {
 	if m.ForceAddress != "" {
 		config.Address = m.ForceAddress
 	}
-
+	if v := os.Getenv(EnvVaultCACert); v != "" {
+		m.flagCACert = v
+	}
+	if v := os.Getenv(EnvVaultCAPath); v != "" {
+		m.flagCAPath = v
+	}
+	if v := os.Getenv(EnvVaultInsecure); v != "" {
+		var err error
+		m.flagInsecure, err = strconv.ParseBool(v)
+		if err != nil {
+			return nil, fmt.Errorf("Invalid value passed in for -insecure flag: %s", err)
+		}
+	}
 	// If we need custom TLS configuration, then set it
 	if m.flagCACert != "" || m.flagCAPath != "" || m.flagInsecure {
+		var certPool *x509.CertPool
+		var err error
+		if m.flagCACert != "" {
+			certPool, err = m.loadCACert(m.flagCACert)
+		} else if m.flagCAPath != "" {
+			certPool, err = m.loadCAPath(m.flagCAPath)
+		}
+		if err != nil {
+			return nil, fmt.Errorf("Error setting up CA path: %s", err)
+		}
+
 		tlsConfig := &tls.Config{
 			InsecureSkipVerify: m.flagInsecure,
 			MinVersion:         tls.VersionTLS12,
+			RootCAs:            certPool,
 		}
-
-		// TODO: Root CAs
 
 		client := *http.DefaultClient
 		client.Transport = &http.Transport{
@@ -94,6 +125,11 @@ func (m *Meta) Client() (*api.Client, error) {
 
 	// If we have a token directly, then set that
 	token := m.ClientToken
+
+	// Try to set the token to what is already stored
+	if token == "" {
+		token = client.Token()
+	}
 
 	// If we don't have a token, check the token helper
 	if token == "" {
@@ -149,6 +185,7 @@ func (m *Meta) FlagSet(n string, fs FlagSetFlags) *flag.FlagSet {
 		f.StringVar(&m.flagCACert, "ca-cert", "", "")
 		f.StringVar(&m.flagCAPath, "ca-path", "", "")
 		f.BoolVar(&m.flagInsecure, "insecure", false, "")
+		f.BoolVar(&m.flagInsecure, "tls-skip-verify", false, "")
 	}
 
 	// Create an io.Writer that writes to our Ui properly for errors.
@@ -181,4 +218,71 @@ func (m *Meta) TokenHelper() (*token.Helper, error) {
 
 	path = token.HelperPath(path)
 	return &token.Helper{Path: path}, nil
+}
+
+func (m *Meta) loadCACert(path string) (*x509.CertPool, error) {
+	certs, err := m.loadCertFromPEM(path)
+	if err != nil {
+		return nil, fmt.Errorf("Error loading %s: %s", path, err)
+	}
+
+	result := x509.NewCertPool()
+	for _, cert := range certs {
+		result.AddCert(cert)
+	}
+
+	return result, nil
+}
+
+func (m *Meta) loadCAPath(path string) (*x509.CertPool, error) {
+	result := x509.NewCertPool()
+	fn := func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+
+		if info.IsDir() {
+			return nil
+		}
+
+		certs, err := m.loadCertFromPEM(path)
+		if err != nil {
+			return fmt.Errorf("Error loading %s: %s", path, err)
+		}
+
+		for _, cert := range certs {
+			result.AddCert(cert)
+		}
+		return nil
+	}
+
+	return result, filepath.Walk(path, fn)
+}
+
+func (m *Meta) loadCertFromPEM(path string) ([]*x509.Certificate, error) {
+	pemCerts, err := ioutil.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+
+	certs := make([]*x509.Certificate, 0, 5)
+	for len(pemCerts) > 0 {
+		var block *pem.Block
+		block, pemCerts = pem.Decode(pemCerts)
+		if block == nil {
+			break
+		}
+		if block.Type != "CERTIFICATE" || len(block.Headers) != 0 {
+			continue
+		}
+
+		cert, err := x509.ParseCertificate(block.Bytes)
+		if err != nil {
+			return nil, err
+		}
+
+		certs = append(certs, cert)
+	}
+
+	return certs, nil
 }

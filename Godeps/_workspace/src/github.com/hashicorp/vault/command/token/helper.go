@@ -3,10 +3,24 @@ package token
 import (
 	"bytes"
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
+
+	"github.com/kardianos/osext"
 )
+
+var exePath string
+
+func init() {
+	var err error
+	exePath, err = osext.Executable()
+	if err != nil {
+		panic("failed to detect self path: " + err.Error())
+	}
+}
 
 // HelperPath takes the configured path to a helper and expands it to
 // a full absolute path that can be executed. If the path is relative then
@@ -20,7 +34,7 @@ func HelperPath(path string) string {
 	// Get the binary name. If it isn't absolute, prepend "vault token-"
 	binary := path[0:space]
 	if !filepath.IsAbs(binary) {
-		binary = "vault token-" + binary
+		binary = exePath + " token-" + binary
 	}
 
 	// Return the resulting string
@@ -45,19 +59,24 @@ type Helper struct {
 
 // Erase deletes the contents from the helper.
 func (h *Helper) Erase() error {
-	cmd := h.cmd("erase")
+	cmd, err := h.cmd("erase")
+	if err != nil {
+		return fmt.Errorf("Error: %s", err)
+	}
 	if output, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf(
 			"Error: %s\n\n%s", err, string(output))
 	}
-
 	return nil
 }
 
 // Get gets the token value from the helper.
 func (h *Helper) Get() (string, error) {
 	var buf, stderr bytes.Buffer
-	cmd := h.cmd("get")
+	cmd, err := h.cmd("get")
+	if err != nil {
+		return "", fmt.Errorf("Error: %s", err)
+	}
 	cmd.Stdout = &buf
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
@@ -71,7 +90,10 @@ func (h *Helper) Get() (string, error) {
 // Store stores the token value into the helper.
 func (h *Helper) Store(v string) error {
 	buf := bytes.NewBufferString(v)
-	cmd := h.cmd("store")
+	cmd, err := h.cmd("store")
+	if err != nil {
+		return fmt.Errorf("Error: %s", err)
+	}
 	cmd.Stdin = buf
 	if output, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf(
@@ -81,7 +103,24 @@ func (h *Helper) Store(v string) error {
 	return nil
 }
 
-func (h *Helper) cmd(op string) *exec.Cmd {
-	cmd := exec.Command("sh", "-c", h.Path+" "+op)
-	return cmd
+func (h *Helper) cmd(op string) (*exec.Cmd, error) {
+	script := strings.Replace(h.Path, "\\", "\\\\", -1) + " " + op
+	return ExecScript(script)
+}
+
+// ExecScript returns a command to execute a script
+func ExecScript(script string) (*exec.Cmd, error) {
+	var shell, flag string
+	if runtime.GOOS == "windows" {
+		shell = "cmd"
+		flag = "/C"
+	} else {
+		shell = "/bin/sh"
+		flag = "-c"
+	}
+	if other := os.Getenv("SHELL"); other != "" {
+		shell = other
+	}
+	cmd := exec.Command(shell, flag, script)
+	return cmd, nil
 }

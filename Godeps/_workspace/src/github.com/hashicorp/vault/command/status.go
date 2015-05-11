@@ -98,7 +98,7 @@ Usage: vault status [options]
 
 General Options:
 
-  -address=TODO           The address of the Vault server.
+  -address=addr           The address of the Vault server.
 
   -ca-cert=path           Path to a PEM encoded CA cert file to use to
                           verify the Vault server SSL certificate.
@@ -107,7 +107,7 @@ General Options:
                           to verify the Vault server SSL certificate. If both
                           -ca-cert and -ca-path are specified, -ca-path is used.
 
-  -insecure               Do not verify TLS certificate. This is highly
+  -tls-skip-verify        Do not verify TLS certificate. This is highly
                           not recommended. This is especially not recommended
                           for unsealing a vault.
 

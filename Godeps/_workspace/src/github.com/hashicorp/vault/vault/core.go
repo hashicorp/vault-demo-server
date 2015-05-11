@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net/url"
 	"os"
 	"strings"
 	"sync"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/armon/go-metrics"
 	"github.com/hashicorp/vault/audit"
+	"github.com/hashicorp/vault/helper/mlock"
 	"github.com/hashicorp/vault/logical"
 	"github.com/hashicorp/vault/physical"
 	"github.com/hashicorp/vault/shamir"
@@ -82,6 +84,9 @@ func (s *SealConfig) Validate() error {
 	}
 	if s.SecretThreshold < 1 {
 		return fmt.Errorf("secret threshold must be at least one")
+	}
+	if s.SecretShares > 1 && s.SecretThreshold == 1 {
+		return fmt.Errorf("secret threshold must be greater than one for multiple shares")
 	}
 	if s.SecretShares > 255 {
 		return fmt.Errorf("secret shares must be less than 256")
@@ -214,6 +219,18 @@ func NewCore(conf *CoreConfig) (*Core, error) {
 		return nil, fmt.Errorf("missing advertisement address")
 	}
 
+	// Validate the advertise addr if its given to us
+	if conf.AdvertiseAddr != "" {
+		u, err := url.Parse(conf.AdvertiseAddr)
+		if err != nil {
+			return nil, fmt.Errorf("advertisement address is not valid url: %s", err)
+		}
+
+		if u.Scheme == "" {
+			return nil, fmt.Errorf("advertisement address must include scheme (ex. 'http')")
+		}
+	}
+
 	// Wrap the backend in a cache unless disabled
 	if !conf.DisableCache {
 		_, isCache := conf.Physical.(*physical.Cache)
@@ -226,8 +243,17 @@ func NewCore(conf *CoreConfig) (*Core, error) {
 
 	if !conf.DisableMlock {
 		// Ensure our memory usage is locked into physical RAM
-		if err := LockMemory(); err != nil {
-			return nil, fmt.Errorf("failed to lock memory: %v", err)
+		if err := mlock.LockMemory(); err != nil {
+			return nil, fmt.Errorf(
+				"Failed to lock memory: %v\n\n"+
+					"This usually means that the mlock syscall is not available.\n"+
+					"Vault uses mlock to prevent memory from being swapped to\n"+
+					"disk. This requires root privileges as well as a machine\n"+
+					"that supports mlock. Please enable mlock on your system or\n"+
+					"disable Vault from using it. To disable Vault from using it,\n"+
+					"set the `disable_mlock` configuration option in your configuration\n"+
+					"file.",
+				err)
 		}
 	}
 
@@ -283,7 +309,7 @@ func NewCore(conf *CoreConfig) (*Core, error) {
 }
 
 // HandleRequest is used to handle a new incoming request
-func (c *Core) HandleRequest(req *logical.Request) (*logical.Response, error) {
+func (c *Core) HandleRequest(req *logical.Request) (resp *logical.Response, err error) {
 	c.stateLock.RLock()
 	defer c.stateLock.RUnlock()
 	if c.sealed {
@@ -294,10 +320,21 @@ func (c *Core) HandleRequest(req *logical.Request) (*logical.Response, error) {
 	}
 
 	if c.router.LoginPath(req.Path) {
-		return c.handleLoginRequest(req)
+		resp, err = c.handleLoginRequest(req)
 	} else {
-		return c.handleRequest(req)
+		resp, err = c.handleRequest(req)
 	}
+
+	// Ensure we don't leak internal data
+	if resp != nil {
+		if resp.Secret != nil {
+			resp.Secret.InternalData = nil
+		}
+		if resp.Auth != nil {
+			resp.Auth.InternalData = nil
+		}
+	}
+	return
 }
 
 func (c *Core) handleRequest(req *logical.Request) (*logical.Response, error) {
@@ -407,6 +444,13 @@ func (c *Core) handleLoginRequest(req *logical.Request) (*logical.Response, erro
 
 	// Route the request
 	resp, err := c.router.Route(req)
+
+	// A login request should never return a secret!
+	if resp != nil && resp.Secret != nil {
+		c.logger.Printf("[ERR] core: unexpected Secret response for login path"+
+			"(request: %#v, response: %#v)", req, resp)
+		return nil, ErrInternalError
+	}
 
 	// If the response generated an authentication, then generate the token
 	var auth *logical.Auth
@@ -593,12 +637,6 @@ func (c *Core) Initialize(config *SealConfig) (*InitResult, error) {
 		return nil, fmt.Errorf("master key generation failed: %v", err)
 	}
 
-	// Initialize the barrier
-	if err := c.barrier.Initialize(masterKey); err != nil {
-		c.logger.Printf("[ERR] core: failed to initialize barrier: %v", err)
-		return nil, fmt.Errorf("failed to initialize barrier: %v", err)
-	}
-
 	// Return the master key if only a single key part is used
 	results := new(InitResult)
 	if config.SecretShares == 1 {
@@ -612,6 +650,12 @@ func (c *Core) Initialize(config *SealConfig) (*InitResult, error) {
 			return nil, fmt.Errorf("failed to generate shares: %v", err)
 		}
 		results.SecretShares = shares
+	}
+
+	// Initialize the barrier
+	if err := c.barrier.Initialize(masterKey); err != nil {
+		c.logger.Printf("[ERR] core: failed to initialize barrier: %v", err)
+		return nil, fmt.Errorf("failed to initialize barrier: %v", err)
 	}
 	c.logger.Printf("[INFO] core: security barrier initialized")
 

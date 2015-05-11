@@ -17,6 +17,7 @@ type Config struct {
 	Listeners []*Listener `hcl:"-"`
 	Backend   *Backend    `hcl:"-"`
 
+	DisableMlock bool   `hcl:"disable_mlock"`
 	StatsiteAddr string `hcl:"statsite_addr"`
 	StatsdAddr   string `hcl:"statsd_addr"`
 }
@@ -24,6 +25,8 @@ type Config struct {
 // DevConfig is a Config that is used for dev mode of Vault.
 func DevConfig() *Config {
 	return &Config{
+		DisableMlock: true,
+
 		Backend: &Backend{
 			Type: "inmem",
 		},

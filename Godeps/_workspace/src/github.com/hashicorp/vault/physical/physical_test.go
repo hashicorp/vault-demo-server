@@ -2,6 +2,7 @@ package physical
 
 import (
 	"reflect"
+	"sort"
 	"testing"
 	"time"
 )
@@ -126,6 +127,7 @@ func testBackend_ListPrefix(t *testing.T, b Backend) {
 	if len(keys) != 2 {
 		t.Fatalf("bad: %v", keys)
 	}
+	sort.Strings(keys)
 	if keys[0] != "foo" {
 		t.Fatalf("bad: %v", keys)
 	}
@@ -141,6 +143,7 @@ func testBackend_ListPrefix(t *testing.T, b Backend) {
 	if len(keys) != 2 {
 		t.Fatalf("bad: %v", keys)
 	}
+	sort.Strings(keys)
 	if keys[0] != "bar" {
 		t.Fatalf("bad: %v", keys)
 	}
@@ -153,6 +156,7 @@ func testBackend_ListPrefix(t *testing.T, b Backend) {
 	if err != nil {
 		t.Fatalf("err: %v", err)
 	}
+	sort.Strings(keys)
 	if len(keys) != 1 {
 		t.Fatalf("bad: %v", keys)
 	}

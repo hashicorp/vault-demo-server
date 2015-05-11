@@ -46,6 +46,15 @@ func TestPathMap(t *testing.T) {
 		t.Fatalf("bad: %#v", v)
 	}
 
+	// Read via API with other casing
+	v, err = p.Get(storage, "A")
+	if err != nil {
+		t.Fatalf("bad: %#v", err)
+	}
+	if v["value"] != "bar" {
+		t.Fatalf("bad: %#v", v)
+	}
+
 	// Verify List
 	keys, err := p.List(storage, "")
 	if err != nil {
@@ -67,4 +76,13 @@ func TestPathMap_getInvalid(t *testing.T) {
 	if v != nil {
 		t.Fatalf("bad: %#v", v)
 	}
+}
+
+func TestPathMap_routes(t *testing.T) {
+	p := &PathMap{Name: "foo"}
+	TestBackendRoutes(t, &Backend{Paths: p.Paths()}, []string{
+		"map/foo",         // Normal
+		"map/foo/bar",     // Normal
+		"map/foo/bar-baz", // Hyphen key
+	})
 }

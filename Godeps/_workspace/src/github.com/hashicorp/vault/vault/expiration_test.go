@@ -65,7 +65,11 @@ func TestExpiration_Restore(t *testing.T) {
 	// Ensure all are reaped
 	start := time.Now()
 	for time.Now().Sub(start) < time.Second {
-		if len(noop.Requests) < 3 {
+		noop.Lock()
+		less := len(noop.Requests) < 3
+		noop.Unlock()
+
+		if less {
 			time.Sleep(5 * time.Millisecond)
 			continue
 		}
@@ -233,14 +237,21 @@ func TestExpiration_RevokeOnExpire(t *testing.T) {
 
 	start := time.Now()
 	for time.Now().Sub(start) < time.Second {
-		if len(noop.Requests) == 0 {
+		req = nil
+
+		noop.Lock()
+		if len(noop.Requests) > 0 {
+			req = noop.Requests[0]
+		}
+		noop.Unlock()
+		if req == nil {
 			time.Sleep(5 * time.Millisecond)
 			continue
 		}
-		req = noop.Requests[0]
 		if req.Operation != logical.RevokeOperation {
 			t.Fatalf("Bad: %v", req)
 		}
+
 		break
 	}
 }
@@ -470,6 +481,9 @@ func TestExpiration_Renew(t *testing.T) {
 		t.Fatalf("err: %v", err)
 	}
 
+	noop.Lock()
+	defer noop.Unlock()
+
 	if !reflect.DeepEqual(out, noop.Response) {
 		t.Fatalf("Bad: %#v", out)
 	}
@@ -516,6 +530,9 @@ func TestExpiration_Renew_NotRenewable(t *testing.T) {
 	if err.Error() != "lease is not renewable" {
 		t.Fatalf("err: %v", err)
 	}
+
+	noop.Lock()
+	defer noop.Unlock()
 
 	if len(noop.Requests) != 0 {
 		t.Fatalf("Bad: %#v", noop.Requests)
@@ -570,11 +587,18 @@ func TestExpiration_Renew_RevokeOnExpire(t *testing.T) {
 
 	start := time.Now()
 	for time.Now().Sub(start) < time.Second {
-		if len(noop.Requests) < 2 {
+		req = nil
+
+		noop.Lock()
+		if len(noop.Requests) >= 2 {
+			req = noop.Requests[1]
+		}
+		noop.Unlock()
+
+		if req == nil {
 			time.Sleep(5 * time.Millisecond)
 			continue
 		}
-		req = noop.Requests[1]
 		if req.Operation != logical.RevokeOperation {
 			t.Fatalf("Bad: %v", req)
 		}
@@ -609,6 +633,9 @@ func TestExpiration_revokeEntry(t *testing.T) {
 	if err != nil {
 		t.Fatalf("err: %v", err)
 	}
+
+	noop.Lock()
+	defer noop.Unlock()
 
 	req := noop.Requests[0]
 	if req.Operation != logical.RevokeOperation {
@@ -696,6 +723,9 @@ func TestExpiration_renewEntry(t *testing.T) {
 		t.Fatalf("err: %v", err)
 	}
 
+	noop.Lock()
+	defer noop.Unlock()
+
 	if !reflect.DeepEqual(resp, noop.Response) {
 		t.Fatalf("bad: %#v", resp)
 	}
@@ -743,6 +773,9 @@ func TestExpiration_renewAuthEntry(t *testing.T) {
 				Renewable: true,
 				Lease:     time.Minute,
 			},
+			InternalData: map[string]interface{}{
+				"MySecret": "secret",
+			},
 		},
 		IssueTime:  time.Now(),
 		ExpireTime: time.Now().Add(time.Minute),
@@ -752,6 +785,9 @@ func TestExpiration_renewAuthEntry(t *testing.T) {
 	if err != nil {
 		t.Fatalf("err: %v", err)
 	}
+
+	noop.Lock()
+	defer noop.Unlock()
 
 	if !reflect.DeepEqual(resp, noop.Response) {
 		t.Fatalf("bad: %#v", resp)
@@ -770,6 +806,9 @@ func TestExpiration_renewAuthEntry(t *testing.T) {
 	if req.Auth.LeaseIssue.IsZero() {
 		t.Fatalf("Bad: %v", req)
 	}
+	if req.Auth.InternalData["MySecret"] != "secret" {
+		t.Fatalf("Bad: %v", req)
+	}
 }
 
 func TestExpiration_PersistLoadDelete(t *testing.T) {
@@ -785,8 +824,8 @@ func TestExpiration_PersistLoadDelete(t *testing.T) {
 				Lease: time.Minute,
 			},
 		},
-		IssueTime:  time.Now(),
-		ExpireTime: time.Now(),
+		IssueTime:  time.Now().UTC(),
+		ExpireTime: time.Now().UTC(),
 	}
 	if err := exp.persistEntry(le); err != nil {
 		t.Fatalf("err: %v", err)
@@ -826,8 +865,8 @@ func TestLeaseEntry(t *testing.T) {
 				Lease: time.Minute,
 			},
 		},
-		IssueTime:  time.Now(),
-		ExpireTime: time.Now(),
+		IssueTime:  time.Now().UTC(),
+		ExpireTime: time.Now().UTC(),
 	}
 
 	enc, err := le.encode()

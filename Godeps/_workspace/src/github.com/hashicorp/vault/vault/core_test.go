@@ -15,9 +15,35 @@ var (
 	invalidKey = []byte("abcdefghijklmnopqrstuvwxyz")[:17]
 )
 
+func TestNewCore_badAdvertiseAddr(t *testing.T) {
+	conf := &CoreConfig{
+		AdvertiseAddr: "127.0.0.1:8200",
+		Physical:      physical.NewInmem(),
+		DisableMlock:  true,
+	}
+	_, err := NewCore(conf)
+	if err == nil {
+		t.Fatal("should error")
+	}
+}
+
+func TestSealConfig_Invalid(t *testing.T) {
+	s := &SealConfig{
+		SecretShares:    2,
+		SecretThreshold: 1,
+	}
+	err := s.Validate()
+	if err == nil {
+		t.Fatalf("expected err")
+	}
+}
+
 func TestCore_Init(t *testing.T) {
 	inm := physical.NewInmem()
-	conf := &CoreConfig{Physical: inm}
+	conf := &CoreConfig{
+		Physical:     inm,
+		DisableMlock: true,
+	}
 	c, err := NewCore(conf)
 	if err != nil {
 		t.Fatalf("err: %v", err)
@@ -865,13 +891,10 @@ func TestCore_HandleLogin_AuditTrail(t *testing.T) {
 	noopBack := &NoopBackend{
 		Login: []string{"login"},
 		Response: &logical.Response{
-			Secret: &logical.Secret{
+			Auth: &logical.Auth{
 				LeaseOptions: logical.LeaseOptions{
 					Lease: time.Hour,
 				},
-			},
-
-			Auth: &logical.Auth{
 				Policies: []string{"foo", "bar"},
 				Metadata: map[string]string{
 					"user": "armon",
@@ -1023,7 +1046,12 @@ func TestCore_LimitedUseToken(t *testing.T) {
 func TestCore_Standby(t *testing.T) {
 	// Create the first core and initialize it
 	inm := physical.NewInmemHA()
-	core, err := NewCore(&CoreConfig{Physical: inm, AdvertiseAddr: "foo"})
+	advertiseOriginal := "http://127.0.0.1:8200"
+	core, err := NewCore(&CoreConfig{
+		Physical:      inm,
+		AdvertiseAddr: advertiseOriginal,
+		DisableMlock:  true,
+	})
 	if err != nil {
 		t.Fatalf("err: %v", err)
 	}
@@ -1079,12 +1107,17 @@ func TestCore_Standby(t *testing.T) {
 	if !isLeader {
 		t.Fatalf("should be leader")
 	}
-	if advertise != "foo" {
+	if advertise != advertiseOriginal {
 		t.Fatalf("Bad advertise: %v", advertise)
 	}
 
 	// Create a second core, attached to same in-memory store
-	core2, err := NewCore(&CoreConfig{Physical: inm, AdvertiseAddr: "bar"})
+	advertiseOriginal2 := "http://127.0.0.1:8500"
+	core2, err := NewCore(&CoreConfig{
+		Physical:      inm,
+		AdvertiseAddr: advertiseOriginal2,
+		DisableMlock:  true,
+	})
 	if err != nil {
 		t.Fatalf("err: %v", err)
 	}
@@ -1124,7 +1157,7 @@ func TestCore_Standby(t *testing.T) {
 	if isLeader {
 		t.Fatalf("should not be leader")
 	}
-	if advertise != "foo" {
+	if advertise != advertiseOriginal {
 		t.Fatalf("Bad advertise: %v", advertise)
 	}
 
@@ -1182,7 +1215,132 @@ func TestCore_Standby(t *testing.T) {
 	if !isLeader {
 		t.Fatalf("should be leader")
 	}
-	if advertise != "bar" {
+	if advertise != advertiseOriginal2 {
 		t.Fatalf("Bad advertise: %v", advertise)
+	}
+}
+
+// Ensure that InternalData is never returned
+func TestCore_HandleRequest_Login_InternalData(t *testing.T) {
+	noop := &NoopBackend{
+		Login: []string{"login"},
+		Response: &logical.Response{
+			Auth: &logical.Auth{
+				Policies: []string{"foo", "bar"},
+				InternalData: map[string]interface{}{
+					"foo": "bar",
+				},
+			},
+		},
+	}
+
+	c, _, root := TestCoreUnsealed(t)
+	c.credentialBackends["noop"] = func(map[string]string) (logical.Backend, error) {
+		return noop, nil
+	}
+
+	// Enable the credential backend
+	req := logical.TestRequest(t, logical.WriteOperation, "sys/auth/foo")
+	req.Data["type"] = "noop"
+	req.ClientToken = root
+	_, err := c.HandleRequest(req)
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+
+	// Attempt to login
+	lreq := &logical.Request{
+		Path: "auth/foo/login",
+	}
+	lresp, err := c.HandleRequest(lreq)
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+
+	// Ensure we do not get the internal data
+	if lresp.Auth.InternalData != nil {
+		t.Fatalf("bad: %#v", lresp)
+	}
+}
+
+// Ensure that InternalData is never returned
+func TestCore_HandleRequest_InternalData(t *testing.T) {
+	noop := &NoopBackend{
+		Response: &logical.Response{
+			Secret: &logical.Secret{
+				InternalData: map[string]interface{}{
+					"foo": "bar",
+				},
+			},
+			Data: map[string]interface{}{
+				"foo": "bar",
+			},
+		},
+	}
+
+	c, _, root := TestCoreUnsealed(t)
+	c.logicalBackends["noop"] = func(map[string]string) (logical.Backend, error) {
+		return noop, nil
+	}
+
+	// Enable the credential backend
+	req := logical.TestRequest(t, logical.WriteOperation, "sys/mounts/foo")
+	req.Data["type"] = "noop"
+	req.ClientToken = root
+	_, err := c.HandleRequest(req)
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+
+	// Attempt to read
+	lreq := &logical.Request{
+		Operation:   logical.ReadOperation,
+		Path:        "foo/test",
+		ClientToken: root,
+	}
+	lresp, err := c.HandleRequest(lreq)
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+
+	// Ensure we do not get the internal data
+	if lresp.Secret.InternalData != nil {
+		t.Fatalf("bad: %#v", lresp)
+	}
+}
+
+// Ensure login does not return a secret
+func TestCore_HandleLogin_ReturnSecret(t *testing.T) {
+	// Create a badass credential backend that always logs in as armon
+	noopBack := &NoopBackend{
+		Login: []string{"login"},
+		Response: &logical.Response{
+			Secret: &logical.Secret{},
+			Auth: &logical.Auth{
+				Policies: []string{"foo", "bar"},
+			},
+		},
+	}
+	c, _, root := TestCoreUnsealed(t)
+	c.credentialBackends["noop"] = func(map[string]string) (logical.Backend, error) {
+		return noopBack, nil
+	}
+
+	// Enable the credential backend
+	req := logical.TestRequest(t, logical.WriteOperation, "sys/auth/foo")
+	req.Data["type"] = "noop"
+	req.ClientToken = root
+	_, err := c.HandleRequest(req)
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+
+	// Attempt to login
+	lreq := &logical.Request{
+		Path: "auth/foo/login",
+	}
+	_, err = c.HandleRequest(lreq)
+	if err != ErrInternalError {
+		t.Fatalf("err: %v", err)
 	}
 }

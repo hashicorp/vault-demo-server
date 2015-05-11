@@ -6,8 +6,10 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -17,6 +19,7 @@ import (
 	"github.com/hashicorp/vault/command/server"
 	"github.com/hashicorp/vault/helper/flag-slice"
 	"github.com/hashicorp/vault/helper/gated-writer"
+	"github.com/hashicorp/vault/helper/mlock"
 	vaulthttp "github.com/hashicorp/vault/http"
 	"github.com/hashicorp/vault/logical"
 	"github.com/hashicorp/vault/physical"
@@ -72,6 +75,15 @@ func (c *ServerCommand) Run(args []string) int {
 		}
 	}
 
+	// If mlock isn't supported, show a warning. We disable this in
+	// dev because it is quite scary to see when first using Vault.
+	if !dev && !mlock.Supported() {
+		c.Ui.Output("==> WARNING: mlock not supported on this system!\n")
+		c.Ui.Output("  The `mlock` syscall to prevent memory from being swapped to")
+		c.Ui.Output("  disk is not supported on this system. Enabling mlock or")
+		c.Ui.Output("  running Vault on a system with mlock is much more secure.\n")
+	}
+
 	// Create a logger. We wrap it in a gated writer so that it doesn't
 	// start logging too early.
 	logGate := &gatedwriter.Writer{Writer: os.Stderr}
@@ -92,6 +104,18 @@ func (c *ServerCommand) Run(args []string) int {
 		return 1
 	}
 
+	// Attempt to detect the advertise address possible
+	if detect, ok := backend.(physical.AdvertiseDetect); ok && config.Backend.AdvertiseAddr == "" {
+		advertise, err := c.detectAdvertise(detect, config)
+		if err != nil {
+			c.Ui.Error(fmt.Sprintf("Error detecting advertise address: %s", err))
+		} else if advertise == "" {
+			c.Ui.Error("Failed to detect advertise address.")
+		} else {
+			config.Backend.AdvertiseAddr = advertise
+		}
+	}
+
 	// Initialize the core
 	core, err := vault.NewCore(&vault.CoreConfig{
 		AdvertiseAddr:      config.Backend.AdvertiseAddr,
@@ -100,7 +124,12 @@ func (c *ServerCommand) Run(args []string) int {
 		CredentialBackends: c.CredentialBackends,
 		LogicalBackends:    c.LogicalBackends,
 		Logger:             logger,
+		DisableMlock:       config.DisableMlock,
 	})
+	if err != nil {
+		c.Ui.Error(fmt.Sprintf("Error initializing core: %s", err))
+		return 1
+	}
 
 	// If we're in dev mode, then initialize the core
 	if dev {
@@ -112,17 +141,19 @@ func (c *ServerCommand) Run(args []string) int {
 		}
 
 		c.Ui.Output(fmt.Sprintf(
-			"WARNING: Dev mode is enabled!\n\n"+
+			"==> WARNING: Dev mode is enabled!\n\n"+
 				"In this mode, Vault is completely in-memory and unsealed.\n"+
 				"Vault is configured to only have a single unseal key. The root\n"+
 				"token has already been authenticated with the CLI, so you can\n"+
 				"immediately begin using the Vault CLI.\n\n"+
 				"The only step you need to take is to set the following\n"+
-				"environment variable since Vault will be taking without TLS:\n\n"+
-				"    export VAULT_ADDR='http://127.0.0.1:8200'\n\n"+
+				"environment variables:\n\n"+
+				"    export VAULT_ADDR='http://127.0.0.1:8200'\n"+
+				"    export VAULT_TOKEN='%s'\n\n"+
 				"The unseal key and root token are reproduced below in case you\n"+
 				"want to seal/unseal the Vault or play with authentication.\n\n"+
 				"Unseal Key: %s\nRoot Token: %s\n",
+			init.RootToken,
 			hex.EncodeToString(init.SecretShares[0]),
 			init.RootToken,
 		))
@@ -133,11 +164,16 @@ func (c *ServerCommand) Run(args []string) int {
 	info := make(map[string]string)
 	info["backend"] = config.Backend.Type
 	info["log level"] = logLevel
-	infoKeys = append(infoKeys, "log level", "backend")
+	info["mlock"] = fmt.Sprintf(
+		"supported: %v, enabled: %v",
+		mlock.Supported(), !config.DisableMlock)
+	infoKeys = append(infoKeys, "log level", "mlock", "backend")
 
 	// If the backend supports HA, then note it
 	if _, ok := backend.(physical.HABackend); ok {
 		info["backend"] += " (HA available)"
+		info["advertise address"] = config.Backend.AdvertiseAddr
+		infoKeys = append(infoKeys, "advertise address")
 	}
 
 	// Initialize the telemetry
@@ -234,6 +270,64 @@ func (c *ServerCommand) enableDev(core *vault.Core) (*vault.InitResult, error) {
 	}
 
 	return init, nil
+}
+
+// detectAdvertise is used to attempt advertise address detection
+func (c *ServerCommand) detectAdvertise(detect physical.AdvertiseDetect,
+	config *server.Config) (string, error) {
+	// Get the hostname
+	host, err := detect.DetectHostAddr()
+	if err != nil {
+		return "", err
+	}
+
+	// Default the port and scheme
+	scheme := "https"
+	port := 8200
+
+	// Attempt to detect overrides
+	for _, list := range config.Listeners {
+		// Only attempt TCP
+		if list.Type != "tcp" {
+			continue
+		}
+
+		// Check if TLS is disabled
+		if _, ok := list.Config["tls_disable"]; ok {
+			scheme = "http"
+		}
+
+		// Check for address override
+		addr, ok := list.Config["address"]
+		if !ok {
+			addr = "127.0.0.1:8200"
+		}
+
+		// Check for localhost
+		hostStr, portStr, err := net.SplitHostPort(addr)
+		if err != nil {
+			continue
+		}
+		if hostStr == "127.0.0.1" {
+			host = hostStr
+		}
+
+		// Check for custom port
+		listPort, err := strconv.Atoi(portStr)
+		if err != nil {
+			continue
+		}
+		port = listPort
+	}
+
+	// Build a URL
+	url := &url.URL{
+		Scheme: scheme,
+		Host:   fmt.Sprintf("%s:%d", host, port),
+	}
+
+	// Return the URL string
+	return url.String(), nil
 }
 
 // setupTelementry is used ot setup the telemetry sub-systems

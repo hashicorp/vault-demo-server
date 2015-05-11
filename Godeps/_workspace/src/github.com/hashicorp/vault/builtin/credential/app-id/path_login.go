@@ -1,6 +1,8 @@
 package appId
 
 import (
+	"crypto/sha1"
+	"encoding/hex"
 	"fmt"
 	"net"
 	"strings"
@@ -27,6 +29,9 @@ func pathLogin(b *backend) *framework.Path {
 		Callbacks: map[logical.Operation]framework.OperationFunc{
 			logical.WriteOperation: b.pathLogin,
 		},
+
+		HelpSynopsis:    pathLoginSyn,
+		HelpDescription: pathLoginDesc,
 	}
 }
 
@@ -96,10 +101,27 @@ func (b *backend) pathLogin(
 		displayName = raw.(string)
 	}
 
+	// Store hashes of the app ID and user ID for the metadata
+	appIdHash := sha1.Sum([]byte(appId))
+	userIdHash := sha1.Sum([]byte(userId))
+	metadata := map[string]string{
+		"app-id":  "sha1:" + hex.EncodeToString(appIdHash[:]),
+		"user-id": "sha1:" + hex.EncodeToString(userIdHash[:]),
+	}
+
 	return &logical.Response{
 		Auth: &logical.Auth{
 			DisplayName: displayName,
 			Policies:    policies,
+			Metadata:    metadata,
 		},
 	}, nil
 }
+
+const pathLoginSyn = `
+Log in with an App ID and User ID.
+`
+
+const pathLoginDesc = `
+This endpoint authenticates using an application ID, user ID and potential the IP address of the connecting client.
+`
