@@ -2,9 +2,9 @@ package postgresql
 
 import (
 	"fmt"
-	"math/rand"
 	"time"
 
+	"github.com/hashicorp/vault/helper/uuid"
 	"github.com/hashicorp/vault/logical"
 	"github.com/hashicorp/vault/logical/framework"
 	_ "github.com/lib/pq"
@@ -51,11 +51,16 @@ func (b *backend) pathRoleCreateRead(
 		lease = &configLease{Lease: 1 * time.Hour}
 	}
 
-	// Generate the username, password and expiration
-	username := fmt.Sprintf(
-		"vault-%s-%d-%d",
-		req.DisplayName, time.Now().Unix(), rand.Int31n(10000))
-	password := generateUUID()
+	// Generate the username, password and expiration. PG limits user to 63 characters
+	displayName := req.DisplayName
+	if len(displayName) > 26 {
+		displayName = displayName[:26]
+	}
+	username := fmt.Sprintf("%s-%s", displayName, uuid.GenerateUUID())
+	if len(username) > 63 {
+		username = username[:63]
+	}
+	password := uuid.GenerateUUID()
 	expiration := time.Now().UTC().
 		Add(lease.Lease + time.Duration((float64(lease.Lease) * 0.1))).
 		Format("2006-01-02 15:04:05")

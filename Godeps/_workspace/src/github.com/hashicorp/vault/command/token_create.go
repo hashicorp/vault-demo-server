@@ -15,12 +15,14 @@ type TokenCreateCommand struct {
 }
 
 func (c *TokenCreateCommand) Run(args []string) int {
+	var format string
 	var displayName, lease string
 	var orphan bool
 	var metadata map[string]string
 	var numUses int
 	var policies []string
 	flags := c.Meta.FlagSet("mount", FlagSetDefault)
+	flags.StringVar(&format, "format", "table", "")
 	flags.StringVar(&displayName, "display-name", "", "")
 	flags.StringVar(&lease, "lease", "", "")
 	flags.BoolVar(&orphan, "orphan", false, "")
@@ -61,8 +63,7 @@ func (c *TokenCreateCommand) Run(args []string) int {
 		return 2
 	}
 
-	c.Ui.Output(secret.Auth.ClientToken)
-	return 0
+	return OutputSecret(c.Ui, format, secret)
 }
 
 func (c *TokenCreateCommand) Synopsis() string {
@@ -87,18 +88,7 @@ Usage: vault token-create [options]
 
 General Options:
 
-  -address=addr           The address of the Vault server.
-
-  -ca-cert=path           Path to a PEM encoded CA cert file to use to
-                          verify the Vault server SSL certificate.
-
-  -ca-path=path           Path to a directory of PEM encoded CA cert files
-                          to verify the Vault server SSL certificate. If both
-                          -ca-cert and -ca-path are specified, -ca-path is used.
-
-  -tls-skip-verify        Do not verify TLS certificate. This is highly
-                          not recommended. This is especially not recommended
-                          for unsealing a vault.
+  ` + generalOptionsUsage() + `
 
 Token Options:
 
@@ -121,6 +111,10 @@ Token Options:
 
   -use-limit=5            The number of times this token can be used until
                           it is automatically revoked.
+
+  -format=table           The format for output. By default it is a whitespace-
+                          delimited table. This can also be json.
+
 `
 	return strings.TrimSpace(helpText)
 }

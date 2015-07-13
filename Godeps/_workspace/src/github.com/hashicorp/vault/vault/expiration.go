@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/armon/go-metrics"
+	"github.com/hashicorp/vault/helper/uuid"
 	"github.com/hashicorp/vault/logical"
 )
 
@@ -337,7 +338,6 @@ func (m *ExpirationManager) RenewToken(source string, token string,
 	// Attach the ClientToken
 	resp.Auth.ClientToken = token
 	resp.Auth.LeaseIncrement = 0
-	resp.Auth.LeaseIssue = time.Now().UTC()
 
 	// Update the lease entry
 	le.Auth = resp.Auth
@@ -366,17 +366,14 @@ func (m *ExpirationManager) Register(req *logical.Request, resp *logical.Respons
 		return "", err
 	}
 
-	// Setup some of the fields on auth
-	resp.Secret.LeaseIssue = time.Now().UTC()
-
 	// Create a lease entry
 	le := leaseEntry{
-		LeaseID:     path.Join(req.Path, generateUUID()),
+		LeaseID:     path.Join(req.Path, uuid.GenerateUUID()),
 		ClientToken: req.ClientToken,
 		Path:        req.Path,
 		Data:        resp.Data,
 		Secret:      resp.Secret,
-		IssueTime:   resp.Secret.LeaseIssue,
+		IssueTime:   time.Now().UTC(),
 		ExpireTime:  resp.Secret.ExpirationTime(),
 	}
 
@@ -403,16 +400,13 @@ func (m *ExpirationManager) Register(req *logical.Request, resp *logical.Respons
 func (m *ExpirationManager) RegisterAuth(source string, auth *logical.Auth) error {
 	defer metrics.MeasureSince([]string{"expire", "register-auth"}, time.Now())
 
-	// Setup some of the fields on auth
-	auth.LeaseIssue = time.Now().UTC()
-
 	// Create a lease entry
 	le := leaseEntry{
 		LeaseID:     path.Join(source, m.tokenStore.SaltID(auth.ClientToken)),
 		ClientToken: auth.ClientToken,
 		Auth:        auth,
 		Path:        source,
-		IssueTime:   auth.LeaseIssue,
+		IssueTime:   time.Now().UTC(),
 		ExpireTime:  auth.ExpirationTime(),
 	}
 
@@ -642,7 +636,7 @@ func (l *leaseEntry) encode() ([]byte, error) {
 func (le *leaseEntry) renewable() error {
 	// If there is no entry, cannot review
 	if le == nil || le.ExpireTime.IsZero() {
-		return fmt.Errorf("lease not found")
+		return fmt.Errorf("lease not found or lease is not renewable")
 	}
 
 	// Determine if the lease is expired

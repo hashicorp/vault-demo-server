@@ -1,7 +1,9 @@
 package command
 
 import (
+	"bufio"
 	"fmt"
+	"io"
 	"os"
 	"sort"
 	"strings"
@@ -25,6 +27,9 @@ type AuthCommand struct {
 	Meta
 
 	Handlers map[string]AuthHandler
+
+	// The fields below can be overwritten for tests
+	testStdin io.Reader
 }
 
 func (c *AuthCommand) Run(args []string) int {
@@ -44,11 +49,6 @@ func (c *AuthCommand) Run(args []string) int {
 	}
 
 	args = flags.Args()
-	if method == "" && len(args) < 1 {
-		flags.Usage()
-		c.Ui.Error("\nError: auth expects at least one argument")
-		return 1
-	}
 
 	tokenHelper, err := c.TokenHelper()
 	if err != nil {
@@ -63,6 +63,23 @@ func (c *AuthCommand) Run(args []string) int {
 
 	// token is where the final token will go
 	handler := c.Handlers[method]
+
+	// Read token from stdin if first arg is exactly "-"
+	var stdin io.Reader = os.Stdin
+	if c.testStdin != nil {
+		stdin = c.testStdin
+	}
+
+	if len(args) > 0 && args[0] == "-" {
+		stdinR := bufio.NewReader(stdin)
+		args[0], err = stdinR.ReadString('\n')
+		if err != nil && err != io.EOF {
+			c.Ui.Error(fmt.Sprintf("Error reading from stdin: %s", err))
+			return 1
+		}
+		args[0] = strings.TrimSpace(args[0])
+	}
+
 	if method == "" {
 		token := ""
 		if len(args) > 0 {
@@ -95,6 +112,15 @@ func (c *AuthCommand) Run(args []string) int {
 	if methodHelp {
 		c.Ui.Output(handler.Help())
 		return 0
+	}
+
+	// Warn if the VAULT_TOKEN environment variable is set, as that will take
+	// precedence
+	if os.Getenv("VAULT_TOKEN") != "" {
+		c.Ui.Output("==> WARNING: VAULT_TOKEN environment variable set!\n")
+		c.Ui.Output("  The environment variable takes precedence over the value")
+		c.Ui.Output("  set by the auth command. Either update the value of the")
+		c.Ui.Output("  environment variable or unset it to use the new token.\n")
 	}
 
 	var vars map[string]string
@@ -225,21 +251,17 @@ Usage: vault auth [options] [token or config...]
   By specifying -method, alternate authentication methods can be used
   such as OAuth or TLS certificates. For these, additional values for
   configuration can be specified with "key=value" pairs just like
-  "vault write".
+  "vault write". Specify the "-method-help" flag to get help for a specific
+  method.
+
+  If you've mounted a credential backend to a different path, such
+  as mounting "github" to "github-private", the "method" flag should
+  still be "github." Most credential providers support the "mount" option
+  to specify the mount point. See the "-method-help" for more info.
 
 General Options:
 
-  -address=addr           The address of the Vault server.
-
-  -ca-cert=path           Path to a PEM encoded CA cert file to use to
-                          verify the Vault server SSL certificate.
-
-  -ca-path=path           Path to a directory of PEM encoded CA cert files
-                          to verify the Vault server SSL certificate. If both
-                          -ca-cert and -ca-path are specified, -ca-path is used.
-
-  -tls-skip-verify        Do not verify TLS certificate. This is highly
-                          not recommended.
+  ` + generalOptionsUsage() + `
 
 Auth Options:
 

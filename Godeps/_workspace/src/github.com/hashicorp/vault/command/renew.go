@@ -74,23 +74,12 @@ Usage: vault renew [options] id [increment]
   renewed. Renewing the lease will not change the contents of the secret.
 
   To renew a secret, run this command with the lease ID returned when it
-  was read. Optionally, request a specific increment in seconds. Vault may
+  was read. Optionally, request a specific increment in seconds. Vault
   is not required to honor this request.
 
 General Options:
 
-  -address=addr           The address of the Vault server.
-
-  -ca-cert=path           Path to a PEM encoded CA cert file to use to
-                          verify the Vault server SSL certificate.
-
-  -ca-path=path           Path to a directory of PEM encoded CA cert files
-                          to verify the Vault server SSL certificate. If both
-                          -ca-cert and -ca-path are specified, -ca-path is used.
-
-  -tls-skip-verify        Do not verify TLS certificate. This is highly
-                          not recommended. This is especially not recommended
-                          for unsealing a vault.
+  ` + generalOptionsUsage() + `
 
 Renew Options:
 

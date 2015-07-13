@@ -2,11 +2,11 @@ package vault
 
 import (
 	"fmt"
-	"log"
 	"strings"
 	"sync"
 	"testing"
 
+	"github.com/hashicorp/vault/helper/uuid"
 	"github.com/hashicorp/vault/logical"
 )
 
@@ -18,7 +18,6 @@ type NoopBackend struct {
 	Paths    []string
 	Requests []*logical.Request
 	Response *logical.Response
-	Logger   *log.Logger
 }
 
 func (n *NoopBackend) HandleRequest(req *logical.Request) (*logical.Response, error) {
@@ -42,22 +41,18 @@ func (n *NoopBackend) SpecialPaths() *logical.Paths {
 	}
 }
 
-func (n *NoopBackend) SetLogger(l *log.Logger) {
-	n.Logger = l
-}
-
 func TestRouter_Mount(t *testing.T) {
 	r := NewRouter()
 	_, barrier, _ := mockBarrier(t)
 	view := NewBarrierView(barrier, "logical/")
 
 	n := &NoopBackend{}
-	err := r.Mount(n, "prod/aws/", generateUUID(), view)
+	err := r.Mount(n, "prod/aws/", uuid.GenerateUUID(), view)
 	if err != nil {
 		t.Fatalf("err: %v", err)
 	}
 
-	err = r.Mount(n, "prod/aws/", generateUUID(), view)
+	err = r.Mount(n, "prod/aws/", uuid.GenerateUUID(), view)
 	if !strings.Contains(err.Error(), "cannot mount under existing mount") {
 		t.Fatalf("err: %v", err)
 	}
@@ -101,7 +96,7 @@ func TestRouter_Unmount(t *testing.T) {
 	view := NewBarrierView(barrier, "logical/")
 
 	n := &NoopBackend{}
-	err := r.Mount(n, "prod/aws/", generateUUID(), view)
+	err := r.Mount(n, "prod/aws/", uuid.GenerateUUID(), view)
 	if err != nil {
 		t.Fatalf("err: %v", err)
 	}
@@ -115,7 +110,7 @@ func TestRouter_Unmount(t *testing.T) {
 		Path: "prod/aws/foo",
 	}
 	_, err = r.Route(req)
-	if !strings.Contains(err.Error(), "no handler for route") {
+	if !strings.Contains(err.Error(), "unsupported path") {
 		t.Fatalf("err: %v", err)
 	}
 }
@@ -126,7 +121,7 @@ func TestRouter_Remount(t *testing.T) {
 	view := NewBarrierView(barrier, "logical/")
 
 	n := &NoopBackend{}
-	err := r.Mount(n, "prod/aws/", generateUUID(), view)
+	err := r.Mount(n, "prod/aws/", uuid.GenerateUUID(), view)
 	if err != nil {
 		t.Fatalf("err: %v", err)
 	}
@@ -145,7 +140,7 @@ func TestRouter_Remount(t *testing.T) {
 		Path: "prod/aws/foo",
 	}
 	_, err = r.Route(req)
-	if !strings.Contains(err.Error(), "no handler for route") {
+	if !strings.Contains(err.Error(), "unsupported path") {
 		t.Fatalf("err: %v", err)
 	}
 
@@ -174,7 +169,7 @@ func TestRouter_RootPath(t *testing.T) {
 			"policy/*",
 		},
 	}
-	err := r.Mount(n, "prod/aws/", generateUUID(), view)
+	err := r.Mount(n, "prod/aws/", uuid.GenerateUUID(), view)
 	if err != nil {
 		t.Fatalf("err: %v", err)
 	}
@@ -212,7 +207,7 @@ func TestRouter_LoginPath(t *testing.T) {
 			"oauth/*",
 		},
 	}
-	err := r.Mount(n, "auth/foo/", generateUUID(), view)
+	err := r.Mount(n, "auth/foo/", uuid.GenerateUUID(), view)
 	if err != nil {
 		t.Fatalf("err: %v", err)
 	}
@@ -243,7 +238,7 @@ func TestRouter_Taint(t *testing.T) {
 	view := NewBarrierView(barrier, "logical/")
 
 	n := &NoopBackend{}
-	err := r.Mount(n, "prod/aws/", generateUUID(), view)
+	err := r.Mount(n, "prod/aws/", uuid.GenerateUUID(), view)
 	if err != nil {
 		t.Fatalf("err: %v", err)
 	}
@@ -258,7 +253,7 @@ func TestRouter_Taint(t *testing.T) {
 		Path:      "prod/aws/foo",
 	}
 	_, err = r.Route(req)
-	if err.Error() != "no handler for route 'prod/aws/foo'" {
+	if err.Error() != "unsupported path" {
 		t.Fatalf("err: %v", err)
 	}
 
@@ -282,7 +277,7 @@ func TestRouter_Untaint(t *testing.T) {
 	view := NewBarrierView(barrier, "logical/")
 
 	n := &NoopBackend{}
-	err := r.Mount(n, "prod/aws/", generateUUID(), view)
+	err := r.Mount(n, "prod/aws/", uuid.GenerateUUID(), view)
 	if err != nil {
 		t.Fatalf("err: %v", err)
 	}

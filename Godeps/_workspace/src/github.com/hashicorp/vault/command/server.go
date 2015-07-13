@@ -32,6 +32,7 @@ type ServerCommand struct {
 	CredentialBackends map[string]logical.Factory
 	LogicalBackends    map[string]logical.Factory
 
+	ShutdownCh <-chan struct{}
 	Meta
 }
 
@@ -73,6 +74,12 @@ func (c *ServerCommand) Run(args []string) int {
 		} else {
 			config = config.Merge(current)
 		}
+	}
+
+	// Ensure that a backend is provided
+	if config.Backend == nil {
+		c.Ui.Error("A physical backend must be specified")
+		return 1
 	}
 
 	// If mlock isn't supported, show a warning. We disable this in
@@ -148,12 +155,10 @@ func (c *ServerCommand) Run(args []string) int {
 				"immediately begin using the Vault CLI.\n\n"+
 				"The only step you need to take is to set the following\n"+
 				"environment variables:\n\n"+
-				"    export VAULT_ADDR='http://127.0.0.1:8200'\n"+
-				"    export VAULT_TOKEN='%s'\n\n"+
+				"    export VAULT_ADDR='http://127.0.0.1:8200'\n\n"+
 				"The unseal key and root token are reproduced below in case you\n"+
 				"want to seal/unseal the Vault or play with authentication.\n\n"+
 				"Unseal Key: %s\nRoot Token: %s\n",
-			init.RootToken,
 			hex.EncodeToString(init.SecretShares[0]),
 			init.RootToken,
 		))
@@ -233,7 +238,14 @@ func (c *ServerCommand) Run(args []string) int {
 	// Release the log gate.
 	logGate.Flush()
 
-	<-make(chan struct{})
+	// Wait for shutdown
+	select {
+	case <-c.ShutdownCh:
+		c.Ui.Output("==> Vault shutdown triggered")
+		if err := core.Shutdown(); err != nil {
+			c.Ui.Error(fmt.Sprintf("Error with core shutdown: %s", err))
+		}
+	}
 	return 0
 }
 
@@ -293,8 +305,15 @@ func (c *ServerCommand) detectAdvertise(detect physical.AdvertiseDetect,
 		}
 
 		// Check if TLS is disabled
-		if _, ok := list.Config["tls_disable"]; ok {
-			scheme = "http"
+		if val, ok := list.Config["tls_disable"]; ok {
+			disable, err := strconv.ParseBool(val)
+			if err != nil {
+				return "", fmt.Errorf("tls_disable: %s", err)
+			}
+
+			if disable {
+				scheme = "http"
+			}
 		}
 
 		// Check for address override
@@ -395,6 +414,10 @@ General Options:
   -config=<path>      Path to the configuration file or directory. This can be
                       specified multiple times. If it is a directory, all
                       files with a ".hcl" or ".json" suffix will be loaded.
+
+  -dev                Enables Dev mode. In this mode, Vault is completely
+                      in-memory and unsealed. Do not run the Dev server in
+                      production!
 
   -log-level=info     Log verbosity. Defaults to "info", will be outputted
                       to stderr.

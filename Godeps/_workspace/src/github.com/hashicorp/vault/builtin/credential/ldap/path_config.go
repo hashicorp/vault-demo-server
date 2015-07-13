@@ -1,14 +1,16 @@
 package ldap
 
 import (
+	"crypto/tls"
+	"crypto/x509"
 	"fmt"
 	"net"
 	"net/url"
 	"strings"
 
+	"github.com/go-ldap/ldap"
 	"github.com/hashicorp/vault/logical"
 	"github.com/hashicorp/vault/logical/framework"
-	"github.com/vanackere/ldap"
 )
 
 func pathConfig(b *backend) *framework.Path {
@@ -30,6 +32,18 @@ func pathConfig(b *backend) *framework.Path {
 			"userattr": &framework.FieldSchema{
 				Type:        framework.TypeString,
 				Description: "Attribute used for users (default: cn)",
+			},
+			"certificate": &framework.FieldSchema{
+				Type:        framework.TypeString,
+				Description: "CA certificate to use when verifying LDAP server certificate, must be x509 PEM encoded (optional)",
+			},
+			"insecure_tls": &framework.FieldSchema{
+				Type:        framework.TypeBool,
+				Description: "Skip LDAP server SSL Certificate verification - VERY insecure (optional)",
+			},
+			"starttls": &framework.FieldSchema{
+				Type:        framework.TypeBool,
+				Description: "Issue a StartTLS command after establishing unencrypted connection (optional)",
 			},
 		},
 
@@ -72,10 +86,13 @@ func (b *backend) pathConfigRead(
 
 	return &logical.Response{
 		Data: map[string]interface{}{
-			"url":      cfg.Url,
-			"userdn":   cfg.UserDN,
-			"groupdn":  cfg.GroupDN,
-			"userattr": cfg.UserAttr,
+			"url":          cfg.Url,
+			"userdn":       cfg.UserDN,
+			"groupdn":      cfg.GroupDN,
+			"userattr":     cfg.UserAttr,
+			"certificate":  cfg.Certificate,
+			"insecure_tls": cfg.InsecureTLS,
+			"starttls":     cfg.StartTLS,
 		},
 	}, nil
 }
@@ -100,6 +117,18 @@ func (b *backend) pathConfigWrite(
 	if groupdn != "" {
 		cfg.GroupDN = groupdn
 	}
+	certificate := d.Get("certificate").(string)
+	if certificate != "" {
+		cfg.Certificate = certificate
+	}
+	insecureTLS := d.Get("insecure_tls").(bool)
+	if insecureTLS {
+		cfg.InsecureTLS = insecureTLS
+	}
+	startTLS := d.Get("starttls").(bool)
+	if startTLS {
+		cfg.StartTLS = startTLS
+	}
 
 	// Try to connect to the LDAP server, to validate the URL configuration
 	// We can also check the URL at this stage, as anything else would probably
@@ -122,10 +151,31 @@ func (b *backend) pathConfigWrite(
 }
 
 type ConfigEntry struct {
-	Url      string
-	UserDN   string
-	GroupDN  string
-	UserAttr string
+	Url         string
+	UserDN      string
+	GroupDN     string
+	UserAttr    string
+	Certificate string
+	InsecureTLS bool
+	StartTLS    bool
+}
+
+func (c *ConfigEntry) GetTLSConfig(host string) (*tls.Config, error) {
+	tlsConfig := &tls.Config{
+		ServerName: host,
+	}
+	if c.InsecureTLS {
+		tlsConfig.InsecureSkipVerify = true
+	}
+	if c.Certificate != "" {
+		caPool := x509.NewCertPool()
+		ok := caPool.AppendCertsFromPEM([]byte(c.Certificate))
+		if !ok {
+			return nil, fmt.Errorf("could not append CA certificate")
+		}
+		tlsConfig.RootCAs = caPool
+	}
+	return tlsConfig, nil
 }
 
 func (c *ConfigEntry) DialLDAP() (*ldap.Conn, error) {
@@ -146,11 +196,22 @@ func (c *ConfigEntry) DialLDAP() (*ldap.Conn, error) {
 			port = "389"
 		}
 		conn, err = ldap.Dial("tcp", host+":"+port)
+		if c.StartTLS {
+			tlsConfig, err := c.GetTLSConfig(host)
+			if err != nil {
+				break
+			}
+			err = conn.StartTLS(tlsConfig)
+		}
 	case "ldaps":
 		if port == "" {
 			port = "636"
 		}
-		conn, err = ldap.DialTLS("tcp", host+":"+port, nil)
+		tlsConfig, err := c.GetTLSConfig(host)
+		if err != nil {
+			break
+		}
+		conn, err = ldap.DialTLS("tcp", host+":"+port, tlsConfig)
 	default:
 		return nil, fmt.Errorf("invalid LDAP scheme")
 	}

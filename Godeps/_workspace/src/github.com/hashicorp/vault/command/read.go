@@ -12,20 +12,26 @@ type ReadCommand struct {
 
 func (c *ReadCommand) Run(args []string) int {
 	var format string
+	var field string
 	flags := c.Meta.FlagSet("read", FlagSetDefault)
 	flags.StringVar(&format, "format", "table", "")
+	flags.StringVar(&field, "field", "", "")
 	flags.Usage = func() { c.Ui.Error(c.Help()) }
 	if err := flags.Parse(args); err != nil {
 		return 1
 	}
 
 	args = flags.Args()
-	if len(args) < 1 || len(args) > 2 {
-		c.Ui.Error("read expects one or two arguments")
+	if len(args) != 1 {
+		c.Ui.Error("read expects one argument")
 		flags.Usage()
 		return 1
 	}
+
 	path := args[0]
+	if path[0] == '/' {
+		path = path[1:]
+	}
 
 	client, err := c.Client()
 	if err != nil {
@@ -44,6 +50,18 @@ func (c *ReadCommand) Run(args []string) int {
 		c.Ui.Error(fmt.Sprintf(
 			"No value found at %s", path))
 		return 1
+	}
+
+	// Handle single field output
+	if field != "" {
+		if val, ok := secret.Data[field]; ok {
+			c.Ui.Output(val.(string))
+			return 0
+		} else {
+			c.Ui.Error(fmt.Sprintf(
+				"Field %s not present in secret", field))
+			return 1
+		}
 	}
 
 	return OutputSecret(c.Ui, format, secret)
@@ -66,23 +84,15 @@ Usage: vault read [options] path
 
 General Options:
 
-  -address=addr           The address of the Vault server.
-
-  -ca-cert=path           Path to a PEM encoded CA cert file to use to
-                          verify the Vault server SSL certificate.
-
-  -ca-path=path           Path to a directory of PEM encoded CA cert files
-                          to verify the Vault server SSL certificate. If both
-                          -ca-cert and -ca-path are specified, -ca-path is used.
-
-  -tls-skip-verify        Do not verify TLS certificate. This is highly
-                          not recommended. This is especially not recommended
-                          for unsealing a vault.
+  ` + generalOptionsUsage() + `
 
 Read Options:
 
   -format=table           The format for output. By default it is a whitespace-
                           delimited table. This can also be json.
+
+  -field=field            If included, the raw value of the specified field
+  						  will be output raw to stdout.
 
 `
 	return strings.TrimSpace(helpText)

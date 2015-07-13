@@ -33,6 +33,18 @@ func (c *UnsealCommand) Run(args []string) int {
 		return 2
 	}
 
+	sealStatus, err := client.Sys().SealStatus()
+	if err != nil {
+		c.Ui.Error(fmt.Sprintf(
+			"Error checking seal status: %s", err))
+		return 2
+	}
+
+	if !sealStatus.Sealed {
+		c.Ui.Output("Vault is already unsealed.")
+		return 0
+	}
+
 	args = flags.Args()
 
 	value := c.Key
@@ -100,18 +112,7 @@ Usage: vault unseal [options] [key]
 
 General Options:
 
-  -address=addr           The address of the Vault server.
-
-  -ca-cert=path           Path to a PEM encoded CA cert file to use to
-                          verify the Vault server SSL certificate.
-
-  -ca-path=path           Path to a directory of PEM encoded CA cert files
-                          to verify the Vault server SSL certificate. If both
-                          -ca-cert and -ca-path are specified, -ca-path is used.
-
-  -tls-skip-verify        Do not verify TLS certificate. This is highly
-                          not recommended. This is especially not recommended
-                          for unsealing a vault.
+  ` + generalOptionsUsage() + `
 
 Unseal Options:
 

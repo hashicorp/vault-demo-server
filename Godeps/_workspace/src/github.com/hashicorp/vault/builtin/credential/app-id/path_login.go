@@ -2,6 +2,7 @@ package appId
 
 import (
 	"crypto/sha1"
+	"crypto/subtle"
 	"encoding/hex"
 	"fmt"
 	"net"
@@ -40,10 +41,18 @@ func (b *backend) pathLogin(
 	appId := data.Get("app_id").(string)
 	userId := data.Get("user_id").(string)
 
+	// Ensure both appId and userId are provided
+	if appId == "" || userId == "" {
+		return logical.ErrorResponse("missing 'app_id' or 'user_id'"), nil
+	}
+
 	// Look up the apps that this user is allowed to access
 	appsMap, err := b.MapUserId.Get(req.Storage, userId)
 	if err != nil {
 		return nil, err
+	}
+	if appsMap == nil {
+		return logical.ErrorResponse("invalid user ID or app ID"), nil
 	}
 
 	// If there is a CIDR block restriction, check that
@@ -74,8 +83,11 @@ func (b *backend) pathLogin(
 
 	// Verify that the app is in the list
 	found := false
+	appIdBytes := []byte(appId)
 	for _, app := range strings.Split(apps, ",") {
-		if strings.TrimSpace(app) == appId {
+		match := []byte(strings.TrimSpace(app))
+		// Protect against a timing attack with the app_id comparison
+		if subtle.ConstantTimeCompare(match, appIdBytes) == 1 {
 			found = true
 		}
 	}
@@ -83,14 +95,17 @@ func (b *backend) pathLogin(
 		return logical.ErrorResponse("invalid user ID or app ID"), nil
 	}
 
-	// Get the policies associated with the app
-	policies, err := b.MapAppId.Policies(req.Storage, appId)
+	// Get the raw data associated with the app
+	appRaw, err := b.MapAppId.Get(req.Storage, appId)
 	if err != nil {
 		return nil, err
 	}
+	if appRaw == nil {
+		return logical.ErrorResponse("invalid user ID or app ID"), nil
+	}
 
-	// Get the raw data associated with the app
-	appRaw, err := b.MapAppId.Get(req.Storage, appId)
+	// Get the policies associated with the app
+	policies, err := b.MapAppId.Policies(req.Storage, appId)
 	if err != nil {
 		return nil, err
 	}

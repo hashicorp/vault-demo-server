@@ -131,9 +131,10 @@ func (b *Backend) SpecialPaths() *logical.Paths {
 	return b.PathsSpecial
 }
 
-// logical.Backend impl.
-func (b *Backend) SetLogger(logger *log.Logger) {
-	b.logger = logger
+// Setup is used to initialize the backend with the initial backend configuration
+func (b *Backend) Setup(config *logical.BackendConfig) (logical.Backend, error) {
+	b.logger = config.Logger
+	return b, nil
 }
 
 // Logger can be used to get the logger. If no logger has been set,
@@ -373,6 +374,8 @@ func (t FieldType) Zero() interface{} {
 		return false
 	case TypeMap:
 		return map[string]interface{}{}
+	case TypeDurationSecond:
+		return 0
 	default:
 		panic("unknown type: " + t.String())
 	}

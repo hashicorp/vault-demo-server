@@ -20,8 +20,11 @@ func TestCore(t *testing.T) *Core {
 		},
 	}
 	noopBackends := make(map[string]logical.Factory)
-	noopBackends["noop"] = func(map[string]string) (logical.Backend, error) {
+	noopBackends["noop"] = func(*logical.BackendConfig) (logical.Backend, error) {
 		return new(framework.Backend), nil
+	}
+	noopBackends["http"] = func(*logical.BackendConfig) (logical.Backend, error) {
+		return new(rawHTTP), nil
 	}
 
 	physicalBackend := physical.NewInmem()
@@ -82,10 +85,26 @@ func TestKeyCopy(key []byte) []byte {
 
 type noopAudit struct{}
 
-func (n *noopAudit) LogRequest(a *logical.Auth, r *logical.Request) error {
+func (n *noopAudit) LogRequest(a *logical.Auth, r *logical.Request, e error) error {
 	return nil
 }
 
 func (n *noopAudit) LogResponse(a *logical.Auth, r *logical.Request, re *logical.Response, err error) error {
 	return nil
+}
+
+type rawHTTP struct{}
+
+func (n *rawHTTP) HandleRequest(req *logical.Request) (*logical.Response, error) {
+	return &logical.Response{
+		Data: map[string]interface{}{
+			logical.HTTPStatusCode:  200,
+			logical.HTTPContentType: "plain/text",
+			logical.HTTPRawBody:     []byte("hello world"),
+		},
+	}, nil
+}
+
+func (n *rawHTTP) SpecialPaths() *logical.Paths {
+	return &logical.Paths{Unauthenticated: []string{"*"}}
 }

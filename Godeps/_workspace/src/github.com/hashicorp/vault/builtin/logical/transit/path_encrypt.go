@@ -5,6 +5,7 @@ import (
 	"crypto/cipher"
 	"crypto/rand"
 	"encoding/base64"
+	"fmt"
 
 	"github.com/hashicorp/vault/logical"
 	"github.com/hashicorp/vault/logical/framework"
@@ -22,6 +23,11 @@ func pathEncrypt() *framework.Path {
 			"plaintext": &framework.FieldSchema{
 				Type:        framework.TypeString,
 				Description: "Plaintext value to encrypt",
+			},
+
+			"context": &framework.FieldSchema{
+				Type:        framework.TypeString,
+				Description: "Context for key derivation. Required for derived keys.",
 			},
 		},
 
@@ -48,6 +54,17 @@ func pathEncryptWrite(
 		return logical.ErrorResponse("failed to decode plaintext as base64"), logical.ErrInvalidRequest
 	}
 
+	// Decode the context if any
+	contextRaw := d.Get("context").(string)
+	var context []byte
+	if len(contextRaw) != 0 {
+		var err error
+		context, err = base64.StdEncoding.DecodeString(contextRaw)
+		if err != nil {
+			return logical.ErrorResponse("failed to decode context as base64"), logical.ErrInvalidRequest
+		}
+	}
+
 	// Get the policy
 	p, err := getPolicy(req, name)
 	if err != nil {
@@ -56,7 +73,17 @@ func pathEncryptWrite(
 
 	// Error if invalid policy
 	if p == nil {
-		return logical.ErrorResponse("policy not found"), logical.ErrInvalidRequest
+		isDerived := len(context) != 0
+		p, err = generatePolicy(req.Storage, name, isDerived)
+		if err != nil {
+			return logical.ErrorResponse(fmt.Sprintf("failed to upsert policy: %v", err)), logical.ErrInvalidRequest
+		}
+	}
+
+	// Derive the key that should be used
+	key, err := p.DeriveKey(context)
+	if err != nil {
+		return logical.ErrorResponse(err.Error()), logical.ErrInvalidRequest
 	}
 
 	// Guard against a potentially invalid cipher-mode
@@ -67,7 +94,7 @@ func pathEncryptWrite(
 	}
 
 	// Setup the cipher
-	aesCipher, err := aes.NewCipher(p.Key)
+	aesCipher, err := aes.NewCipher(key)
 	if err != nil {
 		return nil, err
 	}

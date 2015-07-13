@@ -5,8 +5,8 @@ import (
 	"github.com/hashicorp/vault/logical/framework"
 )
 
-func Factory(map[string]string) (logical.Backend, error) {
-	return Backend(), nil
+func Factory(conf *logical.BackendConfig) (logical.Backend, error) {
+	return Backend().Setup(conf)
 }
 
 func Backend() *framework.Backend {
@@ -15,11 +15,13 @@ func Backend() *framework.Backend {
 		PathsSpecial: &logical.Paths{
 			Root: []string{
 				"keys/*",
+				"raw/*",
 			},
 		},
 
 		Paths: []*framework.Path{
 			pathKeys(),
+			pathRaw(),
 			pathEncrypt(),
 			pathDecrypt(),
 		},

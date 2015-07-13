@@ -40,6 +40,10 @@ func Handler(core *vault.Core) http.Handler {
 	mux.Handle("/v1/sys/audit/", handleSysAudit(core))
 	mux.Handle("/v1/sys/leader", handleSysLeader(core))
 	mux.Handle("/v1/sys/health", handleSysHealth(core))
+	mux.Handle("/v1/sys/rotate", handleSysRotate(core))
+	mux.Handle("/v1/sys/key-status", handleSysKeyStatus(core))
+	mux.Handle("/v1/sys/rekey/init", handleSysRekeyInit(core))
+	mux.Handle("/v1/sys/rekey/update", handleSysRekeyUpdate(core))
 	mux.Handle("/v1/", handleLogical(core))
 
 	// Wrap the handler in another handler to trigger all help paths.
@@ -76,7 +80,7 @@ func request(core *vault.Core, w http.ResponseWriter, rawReq *http.Request, r *l
 		respondStandby(core, w, rawReq.URL)
 		return resp, false
 	}
-	if respondCommon(w, resp) {
+	if respondCommon(w, resp, err) {
 		return resp, false
 	}
 	if err != nil {
@@ -147,6 +151,11 @@ func requestAuth(r *http.Request, req *logical.Request) *logical.Request {
 }
 
 func respondError(w http.ResponseWriter, status int, err error) {
+	// Adjust status code when sealed
+	if err == vault.ErrSealed {
+		status = http.StatusServiceUnavailable
+	}
+
 	w.Header().Add("Content-Type", "application/json")
 	w.WriteHeader(status)
 
@@ -159,14 +168,29 @@ func respondError(w http.ResponseWriter, status int, err error) {
 	enc.Encode(resp)
 }
 
-func respondCommon(w http.ResponseWriter, resp *logical.Response) bool {
+func respondCommon(w http.ResponseWriter, resp *logical.Response, err error) bool {
 	if resp == nil {
 		return false
 	}
 
 	if resp.IsError() {
+		var statusCode int
+
+		switch err {
+		case logical.ErrPermissionDenied:
+			statusCode = http.StatusForbidden
+		case logical.ErrUnsupportedOperation:
+			statusCode = http.StatusMethodNotAllowed
+		case logical.ErrUnsupportedPath:
+			statusCode = http.StatusNotFound
+		case logical.ErrInvalidRequest:
+			statusCode = http.StatusBadRequest
+		default:
+			statusCode = http.StatusBadRequest
+		}
+
 		err := fmt.Errorf("%s", resp.Data["error"].(string))
-		respondError(w, http.StatusBadRequest, err)
+		respondError(w, statusCode, err)
 		return true
 	}
 

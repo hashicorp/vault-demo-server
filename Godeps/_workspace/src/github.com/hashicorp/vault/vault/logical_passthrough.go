@@ -11,7 +11,7 @@ import (
 )
 
 // logical.Factory
-func PassthroughBackendFactory(map[string]string) (logical.Backend, error) {
+func PassthroughBackendFactory(*logical.BackendConfig) (logical.Backend, error) {
 	var b PassthroughBackend
 	b.Backend = &framework.Backend{
 		Help: strings.TrimSpace(passthroughHelp),
@@ -160,7 +160,7 @@ revoke and/or replace the secret at that path.
 `
 
 const passthroughHelpSynopsis = `
-Pass-through secret storage to the physical backend, allowing you to
+Pass-through secret storage to the storage backend, allowing you to
 read/write arbitrary data into secret storage.
 `
 

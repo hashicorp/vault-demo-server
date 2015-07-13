@@ -7,7 +7,11 @@ import (
 	"github.com/hashicorp/vault/logical/framework"
 )
 
-const SecretTokenType = "token"
+const (
+	SecretTokenType      = "token"
+	DefaultLeaseDuration = 1 * time.Hour
+	DefaultGracePeriod   = 10 * time.Minute
+)
 
 func secretToken() *framework.Secret {
 	return &framework.Secret{
@@ -19,10 +23,10 @@ func secretToken() *framework.Secret {
 			},
 		},
 
-		DefaultDuration:    1 * time.Hour,
-		DefaultGracePeriod: 10 * time.Minute,
+		DefaultDuration:    DefaultLeaseDuration,
+		DefaultGracePeriod: DefaultGracePeriod,
 
-		Renew:  framework.LeaseExtend(1*time.Hour, 0),
+		Renew:  framework.LeaseExtend(0, 0, true),
 		Revoke: secretTokenRevoke,
 	}
 }

@@ -47,15 +47,14 @@ func (c *InitCommand) Run(args []string) int {
 
 	c.Ui.Output(fmt.Sprintf(
 		"\n"+
-			"Vault initialized with %d keys and a key threshold of %d!\n\n"+
-			"Please securely distribute the above keys. Whenever a Vault server\n"+
-			"is started, it must be unsealed with %d (the threshold) of the\n"+
-			"keys above (any of the keys, as long as the total number equals\n"+
-			"the threshold).\n\n"+
-			"Vault does not store the original master key. If you lose the keys\n"+
-			"above such that you no longer have the minimum number (the\n"+
-			"threshold), then your Vault will not be able to be unsealed.",
+			"Vault initialized with %d keys and a key threshold of %d. Please\n"+
+			"securely distribute the above keys. When the Vault is re-sealed,\n"+
+			"restarted, or stopped, you must provide at least %d of these keys\n"+
+			"to unseal it again.\n\n"+
+			"Vault does not store the master key. Without at least %d keys,\n"+
+			"your Vault will remain permanently sealed.",
 		shares,
+		threshold,
 		threshold,
 		threshold,
 	))
@@ -81,18 +80,7 @@ Usage: vault init [options]
 
 General Options:
 
-  -address=addr           The address of the Vault server.
-
-  -ca-cert=path           Path to a PEM encoded CA cert file to use to
-                          verify the Vault server SSL certificate.
-
-  -ca-path=path           Path to a directory of PEM encoded CA cert files
-                          to verify the Vault server SSL certificate. If both
-                          -ca-cert and -ca-path are specified, -ca-path is used.
-
-  -tls-skip-verify        Do not verify TLS certificate. This is highly
-                          not recommended. This is especially not recommended
-                          for unsealing a vault.
+  ` + generalOptionsUsage() + `
 
 Init Options:
 

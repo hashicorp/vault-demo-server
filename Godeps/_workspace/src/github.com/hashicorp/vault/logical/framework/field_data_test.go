@@ -91,6 +91,61 @@ func TestFieldDataGet(t *testing.T) {
 				"child": true,
 			},
 		},
+
+		"duration type, string value": {
+			map[string]*FieldSchema{
+				"foo": &FieldSchema{Type: TypeDurationSecond},
+			},
+			map[string]interface{}{
+				"foo": "42",
+			},
+			"foo",
+			42,
+		},
+
+		"duration type, string duration value": {
+			map[string]*FieldSchema{
+				"foo": &FieldSchema{Type: TypeDurationSecond},
+			},
+			map[string]interface{}{
+				"foo": "42m",
+			},
+			"foo",
+			2520,
+		},
+
+		"duration type, int value": {
+			map[string]*FieldSchema{
+				"foo": &FieldSchema{Type: TypeDurationSecond},
+			},
+			map[string]interface{}{
+				"foo": 42,
+			},
+			"foo",
+			42,
+		},
+
+		"duration type, float value": {
+			map[string]*FieldSchema{
+				"foo": &FieldSchema{Type: TypeDurationSecond},
+			},
+			map[string]interface{}{
+				"foo": 42.0,
+			},
+			"foo",
+			42,
+		},
+
+		"duration type, nil value": {
+			map[string]*FieldSchema{
+				"foo": &FieldSchema{Type: TypeDurationSecond},
+			},
+			map[string]interface{}{
+				"foo": nil,
+			},
+			"foo",
+			0,
+		},
 	}
 
 	for name, tc := range cases {

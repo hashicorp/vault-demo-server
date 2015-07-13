@@ -2,6 +2,7 @@ package http
 
 import (
 	"io"
+	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -57,13 +58,10 @@ func handleLogical(core *vault.Core) http.Handler {
 		// as well in case this is an authentication request that requires
 		// it. Vault core handles stripping this if we need to.
 		resp, ok := request(core, w, r, requestAuth(r, &logical.Request{
-			Operation: op,
-			Path:      path,
-			Data:      req,
-			Connection: &logical.Connection{
-				RemoteAddr: r.RemoteAddr,
-				ConnState:  r.TLS,
-			},
+			Operation:  op,
+			Path:       path,
+			Data:       req,
+			Connection: getConnection(r),
 		}))
 		if !ok {
 			return
@@ -85,6 +83,12 @@ func respondLogical(w http.ResponseWriter, r *http.Request, path string, resp *l
 			// If we have a redirect, redirect! We use a 302 code
 			// because we don't actually know if its permanent.
 			http.Redirect(w, r, resp.Redirect, 302)
+			return
+		}
+
+		// Check if this is a raw response
+		if _, ok := resp.Data[logical.HTTPContentType]; ok {
+			respondRaw(w, r, path, resp)
 			return
 		}
 
@@ -130,6 +134,75 @@ func respondLogical(w http.ResponseWriter, r *http.Request, path string, resp *l
 
 	// Respond
 	respondOk(w, httpResp)
+}
+
+// respondRaw is used when the response is using HTTPContentType and HTTPRawBody
+// to change the default response handling. This is only used for specific things like
+// returning the CRL information on the PKI backends.
+func respondRaw(w http.ResponseWriter, r *http.Request, path string, resp *logical.Response) {
+	// Ensure this is never a secret or auth response
+	if resp.Secret != nil || resp.Auth != nil {
+		respondError(w, http.StatusInternalServerError, nil)
+		return
+	}
+
+	// Get the status code
+	statusRaw, ok := resp.Data[logical.HTTPStatusCode]
+	if !ok {
+		respondError(w, http.StatusInternalServerError, nil)
+		return
+	}
+	status, ok := statusRaw.(int)
+	if !ok {
+		respondError(w, http.StatusInternalServerError, nil)
+		return
+	}
+
+	// Get the header
+	contentTypeRaw, ok := resp.Data[logical.HTTPContentType]
+	if !ok {
+		respondError(w, http.StatusInternalServerError, nil)
+		return
+	}
+	contentType, ok := contentTypeRaw.(string)
+	if !ok {
+		respondError(w, http.StatusInternalServerError, nil)
+		return
+	}
+
+	// Get the body
+	bodyRaw, ok := resp.Data[logical.HTTPRawBody]
+	if !ok {
+		respondError(w, http.StatusInternalServerError, nil)
+		return
+	}
+	body, ok := bodyRaw.([]byte)
+	if !ok {
+		respondError(w, http.StatusInternalServerError, nil)
+		return
+	}
+
+	// Write the response
+	w.Header().Set("Content-Type", contentType)
+	w.WriteHeader(status)
+	w.Write(body)
+}
+
+// getConnection is used to format the connection information for
+// attaching to a logical request
+func getConnection(r *http.Request) (connection *logical.Connection) {
+	var remoteAddr string
+
+	remoteAddr, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		remoteAddr = ""
+	}
+
+	connection = &logical.Connection{
+		RemoteAddr: remoteAddr,
+		ConnState:  r.TLS,
+	}
+	return
 }
 
 type LogicalResponse struct {

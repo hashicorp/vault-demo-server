@@ -30,6 +30,10 @@ type TestCase struct {
 	// Backend is the backend that will be mounted.
 	Backend logical.Backend
 
+	// Factory can be used instead of Backend if the
+	// backend requires more construction
+	Factory logical.Factory
+
 	// Steps are the set of operations that are run for this test case.
 	Steps []TestStep
 
@@ -106,12 +110,20 @@ func Test(t TestT, c TestCase) {
 		c.PreCheck()
 	}
 
+	// Check that something is provided
+	if c.Backend == nil && c.Factory == nil {
+		t.Fatal("Must provide either Backend or Factory")
+	}
+
 	// Create an in-memory Vault core
 	core, err := vault.NewCore(&vault.CoreConfig{
 		Physical: physical.NewInmem(),
 		LogicalBackends: map[string]logical.Factory{
-			"test": func(map[string]string) (logical.Backend, error) {
-				return c.Backend, nil
+			"test": func(conf *logical.BackendConfig) (logical.Backend, error) {
+				if c.Backend != nil {
+					return c.Backend, nil
+				}
+				return c.Factory(conf)
 			},
 		},
 	})
@@ -187,11 +199,10 @@ func Test(t TestT, c TestCase) {
 		resp, err := core.HandleRequest(req)
 		if resp != nil && resp.Secret != nil {
 			// Revoke this secret later
-			revoke = append(revoke, logical.RevokeRequest(
-				req.Path,
-				resp.Secret,
-				resp.Data,
-			))
+			revoke = append(revoke, &logical.Request{
+				Operation: logical.WriteOperation,
+				Path:      "sys/revoke/" + resp.Secret.LeaseID,
+			})
 		}
 		if err == nil && resp.IsError() && !s.ErrorOk {
 			err = fmt.Errorf("Erroneous response:\n\n%#v", resp)
@@ -209,7 +220,7 @@ func Test(t TestT, c TestCase) {
 	// Revoke any secrets we might have.
 	var failedRevokes []*logical.Secret
 	for _, req := range revoke {
-		log.Printf("[WARN] Revoking secret: %#v", req.Secret)
+		log.Printf("[WARN] Revoking secret: %#v", req)
 		req.ClientToken = client.Token()
 		resp, err := core.HandleRequest(req)
 		if err == nil && resp.IsError() {

@@ -2,12 +2,22 @@ package physical
 
 import (
 	"fmt"
+	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/armon/go-metrics"
 	"github.com/samuel/go-zookeeper/zk"
+)
+
+const (
+	// ZKNodeFilePrefix is prefixed to any "files" in ZooKeeper,
+	// so that they do not collide with directory entries. Otherwise,
+	// we cannot delete a file if the path is a full-prefix of another
+	// key.
+	ZKNodeFilePrefix = "_"
 )
 
 // ZookeeperBackend is a physical backend that stores data at specific
@@ -79,7 +89,7 @@ func (c *ZookeeperBackend) ensurePath(path string, value []byte) error {
 					return err
 				}
 			} else if isLastNode && exists {
-				if _, err := c.client.Set(fullPath, value, int32(0)); err != nil {
+				if _, err := c.client.Set(fullPath, value, int32(-1)); err != nil {
 					return err
 				}
 			}
@@ -88,13 +98,18 @@ func (c *ZookeeperBackend) ensurePath(path string, value []byte) error {
 	return nil
 }
 
+// nodePath returns an etcd filepath based on the given key.
+func (c *ZookeeperBackend) nodePath(key string) string {
+	return filepath.Join(c.path, filepath.Dir(key), ZKNodeFilePrefix+filepath.Base(key))
+}
+
 // Put is used to insert or update an entry
 func (c *ZookeeperBackend) Put(entry *Entry) error {
 	defer metrics.MeasureSince([]string{"zookeeper", "put"}, time.Now())
 
 	// Attempt to set the full path
-	fullPath := c.path + entry.Key
-	_, err := c.client.Set(fullPath, entry.Value, 0)
+	fullPath := c.nodePath(entry.Key)
+	_, err := c.client.Set(fullPath, entry.Value, -1)
 
 	// If we get ErrNoNode, we need to construct the path hierarchy
 	if err == zk.ErrNoNode {
@@ -108,7 +123,7 @@ func (c *ZookeeperBackend) Get(key string) (*Entry, error) {
 	defer metrics.MeasureSince([]string{"zookeeper", "get"}, time.Now())
 
 	// Attempt to read the full path
-	fullPath := c.path + key
+	fullPath := c.nodePath(key)
 	value, _, err := c.client.Get(fullPath)
 
 	// Ignore if the node does not exist
@@ -135,7 +150,7 @@ func (c *ZookeeperBackend) Delete(key string) error {
 	defer metrics.MeasureSince([]string{"zookeeper", "delete"}, time.Now())
 
 	// Delete the full path
-	fullPath := c.path + key
+	fullPath := c.nodePath(key)
 	err := c.client.Delete(fullPath, -1)
 
 	// Mask if the node does not exist
@@ -161,16 +176,152 @@ func (c *ZookeeperBackend) List(prefix string) ([]string, error) {
 
 	children := []string{}
 	for _, key := range result {
-		children = append(children, key)
-
 		// Check if this entry has any child entries,
 		// and append the slash which is what Vault depends on
 		// for iteration
 		nodeChildren, _, _ := c.client.Children(fullPath + "/" + key)
 		if nodeChildren != nil && len(nodeChildren) > 0 {
 			children = append(children, key+"/")
+		} else {
+			children = append(children, key[1:])
 		}
 	}
 	sort.Strings(children)
 	return children, nil
+}
+
+// LockWith is used for mutual exclusion based on the given key.
+func (c *ZookeeperBackend) LockWith(key, value string) (Lock, error) {
+	l := &ZookeeperHALock{
+		in:    c,
+		key:   key,
+		value: value,
+	}
+	return l, nil
+}
+
+// ZookeeperHALock is a Zookeeper Lock implementation for the HABackend
+type ZookeeperHALock struct {
+	in    *ZookeeperBackend
+	key   string
+	value string
+
+	held      bool
+	localLock sync.Mutex
+	leaderCh  chan struct{}
+	zkLock    *zk.Lock
+}
+
+func (i *ZookeeperHALock) Lock(stopCh <-chan struct{}) (<-chan struct{}, error) {
+	i.localLock.Lock()
+	defer i.localLock.Unlock()
+	if i.held {
+		return nil, fmt.Errorf("lock already held")
+	}
+
+	// Attempt an async acquisition
+	didLock := make(chan struct{})
+	failLock := make(chan error, 1)
+	releaseCh := make(chan bool, 1)
+	lockpath := i.in.nodePath(i.key)
+	go i.attemptLock(lockpath, didLock, failLock, releaseCh)
+
+	// Wait for lock acquisition, failure, or shutdown
+	select {
+	case <-didLock:
+		releaseCh <- false
+	case err := <-failLock:
+		return nil, err
+	case <-stopCh:
+		releaseCh <- true
+		return nil, nil
+	}
+
+	// Create the leader channel
+	i.held = true
+	i.leaderCh = make(chan struct{})
+
+	// Watch for Events which could result in loss of our zkLock and close(i.leaderCh)
+	currentVal, _, lockeventCh, err := i.in.client.GetW(lockpath)
+	if err != nil {
+		return nil, fmt.Errorf("unable to watch HA lock: %v", err)
+	}
+	if i.value != string(currentVal) {
+		return nil, fmt.Errorf("lost HA lock immediately before watch")
+	}
+	go i.monitorLock(lockeventCh, i.leaderCh)
+
+	return i.leaderCh, nil
+}
+
+func (i *ZookeeperHALock) attemptLock(lockpath string, didLock chan struct{}, failLock chan error, releaseCh chan bool) {
+	// Wait to acquire the lock in ZK
+	acl := zk.WorldACL(zk.PermAll)
+	lock := zk.NewLock(i.in.client, lockpath, acl)
+	err := lock.Lock()
+	if err != nil {
+		failLock <- err
+		return
+	}
+	// Set node value
+	data := []byte(i.value)
+	err = i.in.ensurePath(lockpath, data)
+	if err != nil {
+		failLock <- err
+		lock.Unlock()
+		return
+	}
+	i.zkLock = lock
+
+	// Signal that lock is held
+	close(didLock)
+
+	// Handle an early abort
+	release := <-releaseCh
+	if release {
+		lock.Unlock()
+	}
+}
+
+func (i *ZookeeperHALock) monitorLock(lockeventCh <-chan zk.Event, leaderCh chan struct{}) {
+	for {
+		select {
+		case event := <-lockeventCh:
+			// Lost connection?
+			switch event.State {
+			case zk.StateConnected:
+			case zk.StateHasSession:
+			default:
+				close(leaderCh)
+				return
+			}
+
+			// Lost lock?
+			switch event.Type {
+			case zk.EventNodeChildrenChanged:
+			case zk.EventSession:
+			default:
+				close(leaderCh)
+				return
+			}
+		}
+	}
+}
+
+func (i *ZookeeperHALock) Unlock() error {
+	i.localLock.Lock()
+	defer i.localLock.Unlock()
+	if !i.held {
+		return nil
+	}
+
+	i.held = false
+	i.zkLock.Unlock()
+	return nil
+}
+
+func (i *ZookeeperHALock) Value() (bool, string, error) {
+	lockpath := i.in.nodePath(i.key)
+	value, _, err := i.in.client.Get(lockpath)
+	return (value != nil), string(value), err
 }

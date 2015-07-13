@@ -1,8 +1,6 @@
 package vault
 
 import (
-	"crypto/sha1"
-	"encoding/hex"
 	"fmt"
 	"strings"
 	"sync"
@@ -10,6 +8,7 @@ import (
 
 	"github.com/armon/go-metrics"
 	"github.com/armon/go-radix"
+	"github.com/hashicorp/vault/helper/salt"
 	"github.com/hashicorp/vault/logical"
 )
 
@@ -39,9 +38,7 @@ type mountEntry struct {
 
 // SaltID is used to apply a salt and hash to an ID to make sure its not reversable
 func (me *mountEntry) SaltID(id string) string {
-	comb := me.salt + id
-	hash := sha1.Sum([]byte(comb))
-	return hex.EncodeToString(hash[:])
+	return salt.SaltID(me.salt, id, salt.SHA1Hash)
 }
 
 // Mount is used to expose a logical backend at a given prefix, using a unique salt,
@@ -156,7 +153,7 @@ func (r *Router) Route(req *logical.Request) (*logical.Response, error) {
 	}
 	r.l.RUnlock()
 	if !ok {
-		return nil, fmt.Errorf("no handler for route '%s'", req.Path)
+		return logical.ErrorResponse(fmt.Sprintf("no handler for route '%s'", req.Path)), logical.ErrUnsupportedPath
 	}
 	defer metrics.MeasureSince([]string{"route", string(req.Operation),
 		strings.Replace(mount, "/", "-", -1)}, time.Now())
@@ -168,7 +165,7 @@ func (r *Router) Route(req *logical.Request) (*logical.Response, error) {
 		switch req.Operation {
 		case logical.RevokeOperation, logical.RollbackOperation:
 		default:
-			return nil, fmt.Errorf("no handler for route '%s'", req.Path)
+			return logical.ErrorResponse(fmt.Sprintf("no handler for route '%s'", req.Path)), logical.ErrUnsupportedPath
 		}
 	}
 
@@ -178,6 +175,7 @@ func (r *Router) Route(req *logical.Request) (*logical.Response, error) {
 	// Adjust the path to exclude the routing prefix
 	original := req.Path
 	req.Path = strings.TrimPrefix(req.Path, mount)
+	req.MountPoint = mount
 	if req.Path == "/" {
 		req.Path = ""
 	}
@@ -200,6 +198,7 @@ func (r *Router) Route(req *logical.Request) (*logical.Response, error) {
 	// Reset the request before returning
 	defer func() {
 		req.Path = original
+		req.MountPoint = ""
 		req.Connection = originalConn
 		req.Storage = nil
 		req.ClientToken = clientToken

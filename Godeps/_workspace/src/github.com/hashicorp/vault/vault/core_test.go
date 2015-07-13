@@ -348,6 +348,17 @@ func TestCore_SealUnseal(t *testing.T) {
 	}
 }
 
+// Attempt to shutdown after unseal
+func TestCore_Shutdown(t *testing.T) {
+	c, _, _ := TestCoreUnsealed(t)
+	if err := c.Shutdown(); err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if sealed, err := c.Sealed(); err != nil || !sealed {
+		t.Fatalf("err: %v", err)
+	}
+}
+
 // Attempt to seal bad token
 func TestCore_Seal_BadToken(t *testing.T) {
 	c, _, _ := TestCoreUnsealed(t)
@@ -625,7 +636,7 @@ func TestCore_HandleRequest_PermissionAllowed(t *testing.T) {
 		Operation: logical.WriteOperation,
 		Path:      "sys/policy/test",
 		Data: map[string]interface{}{
-			"rules": `path "secret/" { policy = "write" }`,
+			"rules": `path "secret/*" { policy = "write" }`,
 		},
 		ClientToken: root,
 	}
@@ -661,7 +672,7 @@ func TestCore_HandleRequest_NoConnection(t *testing.T) {
 		Response: &logical.Response{},
 	}
 	c, _, root := TestCoreUnsealed(t)
-	c.logicalBackends["noop"] = func(map[string]string) (logical.Backend, error) {
+	c.logicalBackends["noop"] = func(*logical.BackendConfig) (logical.Backend, error) {
 		return noop, nil
 	}
 
@@ -694,7 +705,7 @@ func TestCore_HandleRequest_NoClientToken(t *testing.T) {
 		Response: &logical.Response{},
 	}
 	c, _, root := TestCoreUnsealed(t)
-	c.logicalBackends["noop"] = func(map[string]string) (logical.Backend, error) {
+	c.logicalBackends["noop"] = func(*logical.BackendConfig) (logical.Backend, error) {
 		return noop, nil
 	}
 
@@ -729,7 +740,7 @@ func TestCore_HandleRequest_ConnOnLogin(t *testing.T) {
 		Response: &logical.Response{},
 	}
 	c, _, root := TestCoreUnsealed(t)
-	c.credentialBackends["noop"] = func(map[string]string) (logical.Backend, error) {
+	c.credentialBackends["noop"] = func(*logical.BackendConfig) (logical.Backend, error) {
 		return noop, nil
 	}
 
@@ -770,7 +781,7 @@ func TestCore_HandleLogin_Token(t *testing.T) {
 		},
 	}
 	c, _, root := TestCoreUnsealed(t)
-	c.credentialBackends["noop"] = func(map[string]string) (logical.Backend, error) {
+	c.credentialBackends["noop"] = func(*logical.BackendConfig) (logical.Backend, error) {
 		return noop, nil
 	}
 
@@ -903,7 +914,7 @@ func TestCore_HandleLogin_AuditTrail(t *testing.T) {
 		},
 	}
 	c, _, root := TestCoreUnsealed(t)
-	c.credentialBackends["noop"] = func(map[string]string) (logical.Backend, error) {
+	c.credentialBackends["noop"] = func(*logical.BackendConfig) (logical.Backend, error) {
 		return noopBack, nil
 	}
 	c.auditBackends["noop"] = func(map[string]string) (audit.Backend, error) {
@@ -1070,20 +1081,7 @@ func TestCore_Standby(t *testing.T) {
 	}
 
 	// Wait for core to become active
-	start := time.Now()
-	var standby bool
-	for time.Now().Sub(start) < time.Second {
-		standby, err = core.Standby()
-		if err != nil {
-			t.Fatalf("err: %v", err)
-		}
-		if !standby {
-			break
-		}
-	}
-	if standby {
-		t.Fatalf("should not be in standby mode")
-	}
+	testWaitActive(t, core)
 
 	// Put a secret
 	req := &logical.Request{
@@ -1135,7 +1133,7 @@ func TestCore_Standby(t *testing.T) {
 	}
 
 	// Core2 should be in standby
-	standby, err = core2.Standby()
+	standby, err := core2.Standby()
 	if err != nil {
 		t.Fatalf("err: %v", err)
 	}
@@ -1177,19 +1175,7 @@ func TestCore_Standby(t *testing.T) {
 	}
 
 	// Wait for core2 to become active
-	start = time.Now()
-	for time.Now().Sub(start) < time.Second {
-		standby, err = core2.Standby()
-		if err != nil {
-			t.Fatalf("err: %v", err)
-		}
-		if !standby {
-			break
-		}
-	}
-	if standby {
-		t.Fatalf("should not be in standby mode")
-	}
+	testWaitActive(t, core2)
 
 	// Read the secret
 	req = &logical.Request{
@@ -1235,7 +1221,7 @@ func TestCore_HandleRequest_Login_InternalData(t *testing.T) {
 	}
 
 	c, _, root := TestCoreUnsealed(t)
-	c.credentialBackends["noop"] = func(map[string]string) (logical.Backend, error) {
+	c.credentialBackends["noop"] = func(*logical.BackendConfig) (logical.Backend, error) {
 		return noop, nil
 	}
 
@@ -1279,7 +1265,7 @@ func TestCore_HandleRequest_InternalData(t *testing.T) {
 	}
 
 	c, _, root := TestCoreUnsealed(t)
-	c.logicalBackends["noop"] = func(map[string]string) (logical.Backend, error) {
+	c.logicalBackends["noop"] = func(*logical.BackendConfig) (logical.Backend, error) {
 		return noop, nil
 	}
 
@@ -1322,7 +1308,7 @@ func TestCore_HandleLogin_ReturnSecret(t *testing.T) {
 		},
 	}
 	c, _, root := TestCoreUnsealed(t)
-	c.credentialBackends["noop"] = func(map[string]string) (logical.Backend, error) {
+	c.credentialBackends["noop"] = func(*logical.BackendConfig) (logical.Backend, error) {
 		return noopBack, nil
 	}
 
@@ -1342,5 +1328,620 @@ func TestCore_HandleLogin_ReturnSecret(t *testing.T) {
 	_, err = c.HandleRequest(lreq)
 	if err != ErrInternalError {
 		t.Fatalf("err: %v", err)
+	}
+}
+
+// Renew should return the same lease back
+func TestCore_RenewSameLease(t *testing.T) {
+	c, _, root := TestCoreUnsealed(t)
+
+	// Create a leasable secret
+	req := &logical.Request{
+		Operation: logical.WriteOperation,
+		Path:      "secret/test",
+		Data: map[string]interface{}{
+			"foo":   "bar",
+			"lease": "1h",
+		},
+		ClientToken: root,
+	}
+	resp, err := c.HandleRequest(req)
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if resp != nil {
+		t.Fatalf("bad: %#v", resp)
+	}
+
+	// Read the key
+	req.Operation = logical.ReadOperation
+	req.Data = nil
+	resp, err = c.HandleRequest(req)
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if resp == nil || resp.Secret == nil || resp.Secret.LeaseID == "" {
+		t.Fatalf("bad: %#v", resp.Secret)
+	}
+	original := resp.Secret.LeaseID
+
+	// Renew the lease
+	req = logical.TestRequest(t, logical.WriteOperation, "sys/renew/"+resp.Secret.LeaseID)
+	req.ClientToken = root
+	resp, err = c.HandleRequest(req)
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+
+	// Verify the lease did not change
+	if resp.Secret.LeaseID != original {
+		t.Fatalf("lease id changed: %s %s", original, resp.Secret.LeaseID)
+	}
+}
+
+// Renew of a token should not create a new lease
+func TestCore_RenewToken_SingleRegister(t *testing.T) {
+	c, _, root := TestCoreUnsealed(t)
+
+	// Create a new token
+	req := &logical.Request{
+		Operation: logical.WriteOperation,
+		Path:      "auth/token/create",
+		Data: map[string]interface{}{
+			"lease": "1h",
+		},
+		ClientToken: root,
+	}
+	resp, err := c.HandleRequest(req)
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	newClient := resp.Auth.ClientToken
+
+	// Renew the token
+	req = logical.TestRequest(t, logical.WriteOperation, "auth/token/renew/"+newClient)
+	req.ClientToken = newClient
+	resp, err = c.HandleRequest(req)
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+
+	// Revoke using the renew prefix
+	req = logical.TestRequest(t, logical.WriteOperation, "sys/revoke-prefix/auth/token/renew/")
+	req.ClientToken = root
+	resp, err = c.HandleRequest(req)
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+
+	// Verify our token is still valid (e.g. we did not get invalided by the revoke)
+	req = logical.TestRequest(t, logical.ReadOperation, "auth/token/lookup/"+newClient)
+	req.ClientToken = newClient
+	resp, err = c.HandleRequest(req)
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+
+	// Verify the token exists
+	if resp.Data["id"] != newClient {
+		t.Fatalf("bad: %#v", resp.Data)
+	}
+}
+
+// Based on bug GH-203, attempt to disable a credential backend with leased secrets
+func TestCore_EnableDisableCred_WithLease(t *testing.T) {
+	// Create a badass credential backend that always logs in as armon
+	noopBack := &NoopBackend{
+		Login: []string{"login"},
+		Response: &logical.Response{
+			Auth: &logical.Auth{
+				Policies: []string{"root"},
+			},
+		},
+	}
+	c, _, root := TestCoreUnsealed(t)
+	c.credentialBackends["noop"] = func(*logical.BackendConfig) (logical.Backend, error) {
+		return noopBack, nil
+	}
+
+	// Enable the credential backend
+	req := logical.TestRequest(t, logical.WriteOperation, "sys/auth/foo")
+	req.Data["type"] = "noop"
+	req.ClientToken = root
+	_, err := c.HandleRequest(req)
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+
+	// Attempt to login
+	lreq := &logical.Request{
+		Path: "auth/foo/login",
+	}
+	lresp, err := c.HandleRequest(lreq)
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+
+	// Create a leasable secret
+	req = &logical.Request{
+		Operation: logical.WriteOperation,
+		Path:      "secret/test",
+		Data: map[string]interface{}{
+			"foo":   "bar",
+			"lease": "1h",
+		},
+		ClientToken: lresp.Auth.ClientToken,
+	}
+	resp, err := c.HandleRequest(req)
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if resp != nil {
+		t.Fatalf("bad: %#v", resp)
+	}
+
+	// Read the key
+	req.Operation = logical.ReadOperation
+	req.Data = nil
+	resp, err = c.HandleRequest(req)
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if resp == nil || resp.Secret == nil || resp.Secret.LeaseID == "" {
+		t.Fatalf("bad: %#v", resp.Secret)
+	}
+
+	// Renew the lease
+	req = logical.TestRequest(t, logical.WriteOperation, "sys/renew/"+resp.Secret.LeaseID)
+	req.ClientToken = lresp.Auth.ClientToken
+	_, err = c.HandleRequest(req)
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+
+	// Disable the credential backend
+	req = logical.TestRequest(t, logical.DeleteOperation, "sys/auth/foo")
+	req.ClientToken = lresp.Auth.ClientToken
+	resp, err = c.HandleRequest(req)
+	if err != nil {
+		t.Fatalf("err: %v %#v", err, resp)
+	}
+}
+
+func TestCore_HandleRequest_MountPoint(t *testing.T) {
+	noop := &NoopBackend{
+		Response: &logical.Response{},
+	}
+	c, _, root := TestCoreUnsealed(t)
+	c.logicalBackends["noop"] = func(*logical.BackendConfig) (logical.Backend, error) {
+		return noop, nil
+	}
+
+	// Enable the logical backend
+	req := logical.TestRequest(t, logical.WriteOperation, "sys/mounts/foo")
+	req.Data["type"] = "noop"
+	req.Data["description"] = "foo"
+	req.ClientToken = root
+	_, err := c.HandleRequest(req)
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+
+	// Attempt to request
+	req = &logical.Request{
+		Operation:  logical.ReadOperation,
+		Path:       "foo/test",
+		Connection: &logical.Connection{},
+	}
+	req.ClientToken = root
+	if _, err := c.HandleRequest(req); err != nil {
+		t.Fatalf("err: %v", err)
+	}
+
+	// Verify Path and MountPoint
+	if noop.Requests[0].Path != "test" {
+		t.Fatalf("bad: %#v", noop.Requests)
+	}
+	if noop.Requests[0].MountPoint != "foo/" {
+		t.Fatalf("bad: %#v", noop.Requests)
+	}
+}
+
+func TestCore_Rekey_Lifecycle(t *testing.T) {
+	c, master, _ := TestCoreUnsealed(t)
+
+	// Verify update not allowed
+	if _, err := c.RekeyUpdate(master); err == nil {
+		t.Fatalf("no rekey in progress")
+	}
+
+	// Should be no progress
+	num, err := c.RekeyProgress()
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if num != 0 {
+		t.Fatalf("bad: %d", num)
+	}
+
+	// Should be no config
+	conf, err := c.RekeyConfig()
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if conf != nil {
+		t.Fatalf("bad: %v", conf)
+	}
+
+	// Cancel should be idempotent
+	err = c.RekeyCancel()
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+
+	// Start a rekey
+	newConf := &SealConfig{
+		SecretThreshold: 3,
+		SecretShares:    5,
+	}
+	err = c.RekeyInit(newConf)
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+
+	// Should get config
+	conf, err = c.RekeyConfig()
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if !reflect.DeepEqual(conf, newConf) {
+		t.Fatalf("bad: %v", conf)
+	}
+
+	// Cancel should be clear
+	err = c.RekeyCancel()
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+
+	// Should be no config
+	conf, err = c.RekeyConfig()
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if conf != nil {
+		t.Fatalf("bad: %v", conf)
+	}
+}
+
+func TestCore_Rekey_Init(t *testing.T) {
+	c, _, _ := TestCoreUnsealed(t)
+
+	// Try an invalid config
+	badConf := &SealConfig{
+		SecretThreshold: 5,
+		SecretShares:    1,
+	}
+	err := c.RekeyInit(badConf)
+	if err == nil {
+		t.Fatalf("should fail")
+	}
+
+	// Start a rekey
+	newConf := &SealConfig{
+		SecretThreshold: 3,
+		SecretShares:    5,
+	}
+	err = c.RekeyInit(newConf)
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+
+	// Second should fail
+	err = c.RekeyInit(newConf)
+	if err == nil {
+		t.Fatalf("should fail")
+	}
+}
+
+func TestCore_Rekey_Update(t *testing.T) {
+	c, master, root := TestCoreUnsealed(t)
+
+	// Start a rekey
+	newConf := &SealConfig{
+		SecretThreshold: 3,
+		SecretShares:    5,
+	}
+	err := c.RekeyInit(newConf)
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+
+	// Provide the master
+	result, err := c.RekeyUpdate(master)
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if result == nil || len(result.SecretShares) != 5 {
+		t.Fatalf("Bad: %#v", result)
+	}
+
+	// Should be no progress
+	num, err := c.RekeyProgress()
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if num != 0 {
+		t.Fatalf("bad: %d", num)
+	}
+
+	// Should be no config
+	conf, err := c.RekeyConfig()
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if conf != nil {
+		t.Fatalf("bad: %v", conf)
+	}
+
+	// SealConfig should update
+	conf, err = c.SealConfig()
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if !reflect.DeepEqual(conf, newConf) {
+		t.Fatalf("bad: %#v", conf)
+	}
+
+	// Attempt unseal
+	err = c.Seal(root)
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	for i := 0; i < 3; i++ {
+		_, err = c.Unseal(result.SecretShares[i])
+		if err != nil {
+			t.Fatalf("err: %v", err)
+		}
+	}
+	if sealed, _ := c.Sealed(); sealed {
+		t.Fatalf("should be unsealed")
+	}
+
+	// Start another rekey, this time we require a quorum!
+	newConf = &SealConfig{
+		SecretThreshold: 1,
+		SecretShares:    1,
+	}
+	err = c.RekeyInit(newConf)
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+
+	// Provide the parts master
+	oldResult := result
+	for i := 0; i < 3; i++ {
+		result, err = c.RekeyUpdate(oldResult.SecretShares[i])
+		if err != nil {
+			t.Fatalf("err: %v", err)
+		}
+
+		// Should be progress
+		num, err := c.RekeyProgress()
+		if err != nil {
+			t.Fatalf("err: %v", err)
+		}
+		if (i == 2 && num != 0) || (i != 2 && num != i+1) {
+			t.Fatalf("bad: %d", num)
+		}
+	}
+	if result == nil || len(result.SecretShares) != 1 {
+		t.Fatalf("Bad: %#v", result)
+	}
+
+	// Attempt unseal
+	err = c.Seal(root)
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	unseal, err := c.Unseal(result.SecretShares[0])
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if !unseal {
+		t.Fatalf("should be unsealed")
+	}
+
+	// SealConfig should update
+	conf, err = c.SealConfig()
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if !reflect.DeepEqual(conf, newConf) {
+		t.Fatalf("bad: %#v", conf)
+	}
+}
+
+func TestCore_Rekey_InvalidMaster(t *testing.T) {
+	c, master, _ := TestCoreUnsealed(t)
+
+	// Start a rekey
+	newConf := &SealConfig{
+		SecretThreshold: 3,
+		SecretShares:    5,
+	}
+	err := c.RekeyInit(newConf)
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+
+	// Provide the master (invalid)
+	master[0]++
+	_, err = c.RekeyUpdate(master)
+	if err == nil {
+		t.Fatalf("expected error")
+	}
+}
+
+func testWaitActive(t *testing.T, core *Core) {
+	start := time.Now()
+	var standby bool
+	var err error
+	for time.Now().Sub(start) < time.Second {
+		standby, err = core.Standby()
+		if err != nil {
+			t.Fatalf("err: %v", err)
+		}
+		if !standby {
+			break
+		}
+	}
+	if standby {
+		t.Fatalf("should not be in standby mode")
+	}
+}
+
+func TestCore_Standby_Rotate(t *testing.T) {
+	// Create the first core and initialize it
+	inm := physical.NewInmemHA()
+	advertiseOriginal := "http://127.0.0.1:8200"
+	core, err := NewCore(&CoreConfig{
+		Physical:      inm,
+		AdvertiseAddr: advertiseOriginal,
+		DisableMlock:  true,
+	})
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	key, root := TestCoreInit(t, core)
+	if _, err := core.Unseal(TestKeyCopy(key)); err != nil {
+		t.Fatalf("unseal err: %s", err)
+	}
+
+	// Wait for core to become active
+	testWaitActive(t, core)
+
+	// Create a second core, attached to same in-memory store
+	advertiseOriginal2 := "http://127.0.0.1:8500"
+	core2, err := NewCore(&CoreConfig{
+		Physical:      inm,
+		AdvertiseAddr: advertiseOriginal2,
+		DisableMlock:  true,
+	})
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if _, err := core2.Unseal(TestKeyCopy(key)); err != nil {
+		t.Fatalf("unseal err: %s", err)
+	}
+
+	// Rotate the encryption key
+	req := &logical.Request{
+		Operation:   logical.WriteOperation,
+		Path:        "sys/rotate",
+		ClientToken: root,
+	}
+	_, err = core.HandleRequest(req)
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+
+	// Seal the first core, should step down
+	err = core.Seal(root)
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+
+	// Wait for core2 to become active
+	testWaitActive(t, core2)
+
+	// Read the key status
+	req = &logical.Request{
+		Operation:   logical.ReadOperation,
+		Path:        "sys/key-status",
+		ClientToken: root,
+	}
+	resp, err := core2.HandleRequest(req)
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+
+	// Verify the response
+	if resp.Data["term"] != 2 {
+		t.Fatalf("bad: %#v", resp)
+	}
+}
+
+func TestCore_Standby_Rekey(t *testing.T) {
+	// Create the first core and initialize it
+	inm := physical.NewInmemHA()
+	advertiseOriginal := "http://127.0.0.1:8200"
+	core, err := NewCore(&CoreConfig{
+		Physical:      inm,
+		AdvertiseAddr: advertiseOriginal,
+		DisableMlock:  true,
+	})
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	key, root := TestCoreInit(t, core)
+	if _, err := core.Unseal(TestKeyCopy(key)); err != nil {
+		t.Fatalf("unseal err: %s", err)
+	}
+
+	// Wait for core to become active
+	testWaitActive(t, core)
+
+	// Create a second core, attached to same in-memory store
+	advertiseOriginal2 := "http://127.0.0.1:8500"
+	core2, err := NewCore(&CoreConfig{
+		Physical:      inm,
+		AdvertiseAddr: advertiseOriginal2,
+		DisableMlock:  true,
+	})
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if _, err := core2.Unseal(TestKeyCopy(key)); err != nil {
+		t.Fatalf("unseal err: %s", err)
+	}
+
+	// Rekey the master key
+	newConf := &SealConfig{
+		SecretShares:    1,
+		SecretThreshold: 1,
+	}
+	err = core.RekeyInit(newConf)
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	result, err := core.RekeyUpdate(key)
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if result == nil {
+		t.Fatalf("rekey failed")
+	}
+
+	// Seal the first core, should step down
+	err = core.Seal(root)
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+
+	// Wait for core2 to become active
+	testWaitActive(t, core2)
+
+	// Rekey the master key again
+	err = core2.RekeyInit(newConf)
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	result, err = core2.RekeyUpdate(result.SecretShares[0])
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if result == nil {
+		t.Fatalf("rekey failed")
 	}
 }
