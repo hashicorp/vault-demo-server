@@ -11,6 +11,7 @@ import (
 	"github.com/aws/aws-sdk-go/aws/awserr"
 	"github.com/aws/aws-sdk-go/aws/awsutil"
 	"github.com/aws/aws-sdk-go/service/s3"
+	"github.com/aws/aws-sdk-go/service/s3/s3iface"
 )
 
 // The maximum allowed number of parts in a multi-part upload on Amazon S3.
@@ -215,7 +216,7 @@ type UploadOptions struct {
 
 	// The client to use when uploading to S3. Leave this as nil to use the
 	// default S3 client.
-	S3 *s3.S3
+	S3 s3iface.S3API
 }
 
 // NewUploader creates a new Uploader object to upload data to S3. Pass in
@@ -331,6 +332,7 @@ func (u *uploader) nextReader() (io.ReadSeeker, error) {
 
 			if bytesLeft == 0 {
 				err = io.EOF
+				n = bytesLeft
 			} else if bytesLeft <= u.opts.PartSize {
 				err = io.ErrUnexpectedEOF
 				n = bytesLeft
@@ -403,7 +405,7 @@ func (u *multiuploader) upload(firstBuf io.ReadSeeker) (*UploadOutput, error) {
 	if err != nil {
 		return nil, err
 	}
-	u.uploadID = *resp.UploadID
+	u.uploadID = *resp.UploadId
 
 	// Create the workers
 	ch := make(chan chunk, u.opts.Concurrency)
@@ -490,7 +492,7 @@ func (u *multiuploader) send(c chunk) error {
 		Bucket:     u.in.Bucket,
 		Key:        u.in.Key,
 		Body:       c.buf,
-		UploadID:   &u.uploadID,
+		UploadId:   &u.uploadID,
 		PartNumber: &c.num,
 	})
 
@@ -533,7 +535,7 @@ func (u *multiuploader) fail() {
 	u.opts.S3.AbortMultipartUpload(&s3.AbortMultipartUploadInput{
 		Bucket:   u.in.Bucket,
 		Key:      u.in.Key,
-		UploadID: &u.uploadID,
+		UploadId: &u.uploadID,
 	})
 }
 
@@ -550,7 +552,7 @@ func (u *multiuploader) complete() *s3.CompleteMultipartUploadOutput {
 	resp, err := u.opts.S3.CompleteMultipartUpload(&s3.CompleteMultipartUploadInput{
 		Bucket:          u.in.Bucket,
 		Key:             u.in.Key,
-		UploadID:        &u.uploadID,
+		UploadId:        &u.uploadID,
 		MultipartUpload: &s3.CompletedMultipartUpload{Parts: u.parts},
 	})
 	if err != nil {

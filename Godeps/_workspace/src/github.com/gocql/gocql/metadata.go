@@ -36,6 +36,7 @@ type TableMetadata struct {
 	PartitionKey      []*ColumnMetadata
 	ClusteringColumns []*ColumnMetadata
 	Columns           map[string]*ColumnMetadata
+	OrderedColumns    []string
 }
 
 // schema metadata for a column
@@ -70,6 +71,7 @@ const (
 	PARTITION_KEY  = "partition_key"
 	CLUSTERING_KEY = "clustering_key"
 	REGULAR        = "regular"
+	COMPACT_VALUE  = "compact_value"
 )
 
 // default alias values
@@ -177,6 +179,7 @@ func compileMetadata(
 
 		table := keyspace.Tables[columns[i].Table]
 		table.Columns[columns[i].Name] = &columns[i]
+		table.OrderedColumns = append(table.OrderedColumns, columns[i].Name)
 	}
 
 	if protoVersion == 1 {
@@ -302,13 +305,14 @@ func compileV2Metadata(tables []TableMetadata) {
 	for i := range tables {
 		table := &tables[i]
 
-		partitionColumnCount := countColumnsOfKind(table.Columns, PARTITION_KEY)
-		table.PartitionKey = make([]*ColumnMetadata, partitionColumnCount)
+		keyValidatorParsed := parseType(table.KeyValidator)
+		table.PartitionKey = make([]*ColumnMetadata, len(keyValidatorParsed.types))
 
-		clusteringColumnCount := countColumnsOfKind(table.Columns, CLUSTERING_KEY)
+		clusteringColumnCount := componentColumnCountOfType(table.Columns, CLUSTERING_KEY)
 		table.ClusteringColumns = make([]*ColumnMetadata, clusteringColumnCount)
 
-		for _, column := range table.Columns {
+		for _, columnName := range table.OrderedColumns {
+			column := table.Columns[columnName]
 			if column.Kind == PARTITION_KEY {
 				table.PartitionKey[column.ComponentIndex] = column
 			} else if column.Kind == CLUSTERING_KEY {
@@ -320,14 +324,14 @@ func compileV2Metadata(tables []TableMetadata) {
 }
 
 // returns the count of coluns with the given "kind" value.
-func countColumnsOfKind(columns map[string]*ColumnMetadata, kind string) int {
-	count := 0
+func componentColumnCountOfType(columns map[string]*ColumnMetadata, kind string) int {
+	maxComponentIndex := -1
 	for _, column := range columns {
-		if column.Kind == kind {
-			count++
+		if column.Kind == kind && column.ComponentIndex > maxComponentIndex {
+			maxComponentIndex = column.ComponentIndex
 		}
 	}
-	return count
+	return maxComponentIndex + 1
 }
 
 // query only for the keyspace metadata for the specified keyspace from system.schema_keyspace
@@ -371,12 +375,20 @@ func getKeyspaceMetadata(
 }
 
 // query for only the table metadata in the specified keyspace from system.schema_columnfamilies
-func getTableMetadata(
-	session *Session,
-	keyspaceName string,
-) ([]TableMetadata, error) {
-	query := session.Query(
-		`
+func getTableMetadata(session *Session, keyspaceName string) ([]TableMetadata, error) {
+
+	var (
+		scan func(iter *Iter, table *TableMetadata) bool
+		stmt string
+
+		keyAliasesJSON    []byte
+		columnAliasesJSON []byte
+	)
+
+	if session.cfg.ProtoVersion < protoVersion4 {
+		// we have key aliases
+		// TODO: Do we need key_aliases?
+		stmt = `
 		SELECT
 			columnfamily_name,
 			key_validator,
@@ -386,29 +398,49 @@ func getTableMetadata(
 			column_aliases,
 			value_alias
 		FROM system.schema_columnfamilies
-		WHERE keyspace_name = ?
-		`,
-		keyspaceName,
-	)
+		WHERE keyspace_name = ?`
+
+		scan = func(iter *Iter, table *TableMetadata) bool {
+			return iter.Scan(
+				&table.Name,
+				&table.KeyValidator,
+				&table.Comparator,
+				&table.DefaultValidator,
+				&keyAliasesJSON,
+				&columnAliasesJSON,
+				&table.ValueAlias,
+			)
+		}
+	} else {
+		stmt = `
+		SELECT
+			columnfamily_name,
+			key_validator,
+			comparator,
+			default_validator
+		FROM system.schema_columnfamilies
+		WHERE keyspace_name = ?`
+
+		scan = func(iter *Iter, table *TableMetadata) bool {
+			return iter.Scan(
+				&table.Name,
+				&table.KeyValidator,
+				&table.Comparator,
+				&table.DefaultValidator,
+			)
+		}
+	}
+
 	// Set a routing key to avoid GetRoutingKey from computing the routing key
 	// TODO use a separate connection (pool) for system keyspace queries.
+	query := session.Query(stmt, keyspaceName)
 	query.RoutingKey([]byte{})
 	iter := query.Iter()
 
 	tables := []TableMetadata{}
 	table := TableMetadata{Keyspace: keyspaceName}
 
-	var keyAliasesJSON []byte
-	var columnAliasesJSON []byte
-	for iter.Scan(
-		&table.Name,
-		&table.KeyValidator,
-		&table.Comparator,
-		&table.DefaultValidator,
-		&keyAliasesJSON,
-		&columnAliasesJSON,
-		&table.ValueAlias,
-	) {
+	for scan(iter, &table) {
 		var err error
 
 		// decode the key aliases

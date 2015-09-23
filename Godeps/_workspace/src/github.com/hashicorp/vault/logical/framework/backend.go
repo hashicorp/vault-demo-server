@@ -51,12 +51,17 @@ type Backend struct {
 	Rollback       RollbackFunc
 	RollbackMinAge time.Duration
 
+	// Clean is called on unload to clean up e.g any existing connections
+	// to the backend, if required.
+	Clean CleanupFunc
+
 	// AuthRenew is the callback to call when a RenewRequest for an
 	// authentication comes in. By default, renewal won't be allowed.
 	// See the built-in AuthRenew helpers in lease.go for common callbacks.
 	AuthRenew OperationFunc
 
 	logger  *log.Logger
+	system  logical.SystemView
 	once    sync.Once
 	pathsRe []*regexp.Regexp
 }
@@ -66,6 +71,9 @@ type OperationFunc func(*logical.Request, *FieldData) (*logical.Response, error)
 
 // RollbackFunc is the callback for rollbacks.
 type RollbackFunc func(*logical.Request, string, interface{}) error
+
+// CleanupFunc is the callback for backend unload.
+type CleanupFunc func()
 
 // logical.Backend impl.
 func (b *Backend) HandleRequest(req *logical.Request) (*logical.Response, error) {
@@ -119,11 +127,19 @@ func (b *Backend) HandleRequest(req *logical.Request) (*logical.Response, error)
 		return nil, logical.ErrUnsupportedOperation
 	}
 
-	// Call the callback with the request and the data
-	return callback(req, &FieldData{
+	fd := FieldData{
 		Raw:    raw,
-		Schema: path.Fields,
-	})
+		Schema: path.Fields}
+
+	if req.Operation != logical.HelpOperation {
+		err := fd.Validate()
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	// Call the callback with the request and the data
+	return callback(req, &fd)
 }
 
 // logical.Backend impl.
@@ -134,7 +150,14 @@ func (b *Backend) SpecialPaths() *logical.Paths {
 // Setup is used to initialize the backend with the initial backend configuration
 func (b *Backend) Setup(config *logical.BackendConfig) (logical.Backend, error) {
 	b.logger = config.Logger
+	b.system = config.System
 	return b, nil
+}
+
+func (b *Backend) Cleanup() {
+	if b.Clean != nil {
+		b.Clean()
+	}
 }
 
 // Logger can be used to get the logger. If no logger has been set,
@@ -145,6 +168,43 @@ func (b *Backend) Logger() *log.Logger {
 	}
 
 	return log.New(ioutil.Discard, "", 0)
+}
+
+func (b *Backend) System() logical.SystemView {
+	return b.system
+}
+
+// This method takes in the TTL and MaxTTL values provided by the user, compares
+// those with the SystemView values. If they are empty default values are set.
+// If they are set, their boundaries are validated.
+func (b *Backend) SanitizeTTL(ttlStr, maxTTLStr string) (ttl, maxTTL time.Duration, err error) {
+	sysMaxTTL := b.System().MaxLeaseTTL()
+	if len(ttlStr) == 0 {
+		ttl = b.System().DefaultLeaseTTL()
+	} else {
+		ttl, err = time.ParseDuration(ttlStr)
+		if err != nil {
+			return 0, 0, fmt.Errorf("Invalid ttl: %s", err)
+		}
+		if ttl > sysMaxTTL {
+			return 0, 0, fmt.Errorf("\"ttl\" value must be less than allowed max lease TTL value '%s'", sysMaxTTL.String())
+		}
+	}
+	if len(maxTTLStr) == 0 {
+		maxTTL = sysMaxTTL
+	} else {
+		maxTTL, err = time.ParseDuration(maxTTLStr)
+		if err != nil {
+			return 0, 0, fmt.Errorf("Invalid max_ttl: %s", err)
+		}
+		if maxTTL > sysMaxTTL {
+			return 0, 0, fmt.Errorf("\"max_ttl\" value must be less than allowed max lease TTL value '%s'", sysMaxTTL.String())
+		}
+	}
+	if ttl > maxTTL {
+		ttl = maxTTL
+	}
+	return
 }
 
 // Route looks up the path that would be used for a given path string.

@@ -1,6 +1,9 @@
 package github
 
 import (
+	"fmt"
+	"net/url"
+
 	"github.com/google/go-github/github"
 	"github.com/hashicorp/vault/logical"
 	"github.com/hashicorp/vault/logical/framework"
@@ -39,6 +42,14 @@ func (b *backend) pathLogin(
 		return nil, err
 	}
 
+	if config.BaseURL != "" {
+		parsedURL, err := url.Parse(config.BaseURL)
+		if err != nil {
+			return nil, fmt.Errorf("Successfully parsed base_url when set but failing to parse now: %s", err)
+		}
+		client.BaseURL = parsedURL
+	}
+
 	// Get the user
 	user, _, err := client.Users.Get("")
 	if err != nil {
@@ -47,12 +58,25 @@ func (b *backend) pathLogin(
 
 	// Verify that the user is part of the organization
 	var org *github.Organization
-	orgs, _, err := client.Organizations.List("", nil)
-	if err != nil {
-		return nil, err
+
+	orgOpt := &github.ListOptions{
+		PerPage: 100,
 	}
 
-	for _, o := range orgs {
+	var allOrgs []github.Organization
+	for {
+		orgs, resp, err := client.Organizations.List("", orgOpt)
+		if err != nil {
+			return nil, err
+		}
+		allOrgs = append(allOrgs, orgs...)
+		if resp.NextPage == 0 {
+			break
+		}
+		orgOpt.Page = resp.NextPage
+	}
+
+	for _, o := range allOrgs {
 		if *o.Login == config.Org {
 			org = &o
 			break
@@ -64,11 +88,25 @@ func (b *backend) pathLogin(
 
 	// Get the teams that this user is part of to determine the policies
 	var teamNames []string
-	teams, _, err := client.Organizations.ListUserTeams(nil)
-	if err != nil {
-		return nil, err
+
+	teamOpt := &github.ListOptions{
+		PerPage: 100,
 	}
-	for _, t := range teams {
+
+	var allTeams []github.Team
+	for {
+		teams, resp, err := client.Organizations.ListUserTeams(teamOpt)
+		if err != nil {
+			return nil, err
+		}
+		allTeams = append(allTeams, teams...)
+		if resp.NextPage == 0 {
+			break
+		}
+		teamOpt.Page = resp.NextPage
+	}
+
+	for _, t := range allTeams {
 		// We only care about teams that are part of the organization we use
 		if *t.Organization.ID != *org.ID {
 			continue
@@ -76,6 +114,9 @@ func (b *backend) pathLogin(
 
 		// Append the names so we can get the policies
 		teamNames = append(teamNames, *t.Name)
+		if *t.Name != *t.Slug {
+			teamNames = append(teamNames, *t.Slug)
+		}
 	}
 
 	policiesList, err := b.Map.Policies(req.Storage, teamNames...)

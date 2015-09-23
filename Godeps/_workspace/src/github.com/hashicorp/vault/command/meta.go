@@ -96,7 +96,7 @@ func (m *Meta) Client() (*api.Client, error) {
 		}
 	}
 	// If we need custom TLS configuration, then set it
-	if m.flagCACert != "" || m.flagCAPath != "" || m.flagInsecure {
+	if m.flagCACert != "" || m.flagCAPath != "" || m.flagClientCert != "" || m.flagClientKey != "" || m.flagInsecure {
 		var certPool *x509.CertPool
 		var err error
 		if m.flagCACert != "" {
@@ -133,6 +133,24 @@ func (m *Meta) Client() (*api.Client, error) {
 			}).Dial,
 			TLSClientConfig:     tlsConfig,
 			TLSHandshakeTimeout: 10 * time.Second,
+		}
+
+		// From https://github.com/michiwend/gomusicbrainz/pull/4/files
+		defaultRedirectLimit := 30
+
+		client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+			if len(via) > defaultRedirectLimit {
+				return fmt.Errorf("%d consecutive requests(redirects)", len(via))
+			}
+			if len(via) == 0 {
+				// No redirects
+				return nil
+			}
+			// mutate the subsequent redirect requests with the first Header
+			if token := via[0].Header.Get("X-Vault-Token"); len(token) != 0 {
+				req.Header.Set("X-Vault-Token", token)
+			}
+			return nil
 		}
 
 		config.HttpClient = &client
@@ -315,23 +333,30 @@ func (m *Meta) loadCertFromPEM(path string) ([]*x509.Certificate, error) {
 func generalOptionsUsage() string {
 	general := `
   -address=addr           The address of the Vault server.
+                          Overrides the VAULT_ADDR environment variable if set.
 
   -ca-cert=path           Path to a PEM encoded CA cert file to use to
                           verify the Vault server SSL certificate.
+                          Overrides the VAULT_CACERT environment variable if set.
 
   -ca-path=path           Path to a directory of PEM encoded CA cert files
                           to verify the Vault server SSL certificate. If both
                           -ca-cert and -ca-path are specified, -ca-path is used.
+                          Overrides the VAULT_CAPATH environment variable if set.
 
   -client-cert=path       Path to a PEM encoded client certificate for TLS
                           authentication to the Vault server. Must also specify
-                          -client-key.
+                          -client-key.  Overrides the VAULT_CLIENT_CERT
+                          environment variable if set.
 
   -client-key=path        Path to an unencrypted PEM encoded private key
                           matching the client certificate from -client-cert.
+                          Overrides the VAULT_CLIENT_KEY environment variable
+                          if set.
 
   -tls-skip-verify        Do not verify TLS certificate. This is highly
-                          not recommended.
+                          not recommended.  Verification will also be skipped
+                          if VAULT_SKIP_VERIFY is set.
 	`
 	return strings.TrimSpace(general)
 }

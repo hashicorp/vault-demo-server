@@ -10,9 +10,23 @@ import (
 	"github.com/hashicorp/vault/logical/framework"
 )
 
-// logical.Factory
-func PassthroughBackendFactory(*logical.BackendConfig) (logical.Backend, error) {
+// PassthroughBackendFactory returns a PassthroughBackend
+// with leases switched off
+func PassthroughBackendFactory(conf *logical.BackendConfig) (logical.Backend, error) {
+	return LeaseSwitchedPassthroughBackend(conf, false)
+}
+
+// PassthroughBackendWithLeasesFactory returns a PassthroughBackend
+// with leases switched on
+func LeasedPassthroughBackendFactory(conf *logical.BackendConfig) (logical.Backend, error) {
+	return LeaseSwitchedPassthroughBackend(conf, true)
+}
+
+// LeaseSwitchedPassthroughBackendFactory returns a PassthroughBackend
+// with leases switched on or off
+func LeaseSwitchedPassthroughBackend(conf *logical.BackendConfig, leases bool) (logical.Backend, error) {
 	var b PassthroughBackend
+	b.generateLeases = leases
 	b.Backend = &framework.Backend{
 		Help: strings.TrimSpace(passthroughHelp),
 
@@ -20,9 +34,14 @@ func PassthroughBackendFactory(*logical.BackendConfig) (logical.Backend, error) 
 			&framework.Path{
 				Pattern: ".*",
 				Fields: map[string]*framework.FieldSchema{
+					//TODO: Deprecated in 0.3; remove in 0.4
 					"lease": &framework.FieldSchema{
 						Type:        framework.TypeString,
 						Description: "Lease time for this key when read. Ex: 1h",
+					},
+					"ttl": &framework.FieldSchema{
+						Type:        framework.TypeString,
+						Description: "TTL time for this key when read. Ex: 1h",
 					},
 				},
 
@@ -37,26 +56,34 @@ func PassthroughBackendFactory(*logical.BackendConfig) (logical.Backend, error) 
 				HelpDescription: strings.TrimSpace(passthroughHelpDescription),
 			},
 		},
+	}
 
-		Secrets: []*framework.Secret{
+	if b.generateLeases {
+		b.Backend.Secrets = []*framework.Secret{
 			&framework.Secret{
 				Type: "generic",
 
 				Renew:  b.handleRead,
 				Revoke: b.handleRevoke,
 			},
-		},
+		}
 	}
 
-	return b, nil
+	if conf == nil {
+		return nil, fmt.Errorf("Configuation passed into backend is nil")
+	}
+	b.Backend.Setup(conf)
+
+	return &b, nil
 }
 
 // PassthroughBackend is used storing secrets directly into the physical
-// backend. The secrest are encrypted in the durable storage and custom lease
+// backend. The secrets are encrypted in the durable storage and custom TTL
 // information can be specified, but otherwise this backend doesn't do anything
 // fancy.
 type PassthroughBackend struct {
 	*framework.Backend
+	generateLeases bool
 }
 
 func (b *PassthroughBackend) handleRevoke(
@@ -84,19 +111,37 @@ func (b *PassthroughBackend) handleRead(
 		return nil, fmt.Errorf("json decoding failed: %v", err)
 	}
 
-	// Generate the response
-	resp := b.Secret("generic").Response(rawData, nil)
-	resp.Secret.Renewable = false
-
-	// Check if there is a lease key
-	leaseVal, ok := rawData["lease"].(string)
-	if ok {
-		leaseDuration, err := time.ParseDuration(leaseVal)
-		if err == nil {
-			resp.Secret.Renewable = true
-			resp.Secret.Lease = leaseDuration
+	var resp *logical.Response
+	if b.generateLeases {
+		// Generate the response
+		resp = b.Secret("generic").Response(rawData, nil)
+		resp.Secret.Renewable = false
+	} else {
+		resp = &logical.Response{
+			Secret: &logical.Secret{},
+			Data:   rawData,
 		}
 	}
+
+	// Check if there is a ttl key
+	var ttl string
+	ttl, _ = rawData["lease"].(string)
+	if len(ttl) == 0 {
+		ttl, _ = rawData["ttl"].(string)
+	}
+
+	ttlDuration := b.System().DefaultLeaseTTL()
+	if len(ttl) != 0 {
+		ttlDuration, err = time.ParseDuration(ttl)
+		if err != nil {
+			return logical.ErrorResponse("failed to parse ttl for entry"), nil
+		}
+		if b.generateLeases {
+			resp.Secret.Renewable = true
+		}
+	}
+
+	resp.Secret.TTL = ttlDuration
 
 	return resp, nil
 }
@@ -148,13 +193,17 @@ func (b *PassthroughBackend) handleList(
 	return logical.ListResponse(keys), nil
 }
 
+func (b *PassthroughBackend) GeneratesLeases() bool {
+	return b.generateLeases
+}
+
 const passthroughHelp = `
 The generic backend reads and writes arbitrary secrets to the backend.
 The secrets are encrypted/decrypted by Vault: they are never stored
 unencrypted in the backend and the backend never has an opportunity to
 see the unencrypted value.
 
-Leases can be set on a per-secret basis. These leases will be sent down
+TTLs can be set on a per-secret basis. These TTLs will be sent down
 when that secret is read, and it is assumed that some outside process will
 revoke and/or replace the secret at that path.
 `
@@ -168,9 +217,10 @@ const passthroughHelpDescription = `
 The pass-through backend reads and writes arbitrary data into secret storage,
 encrypting it along the way.
 
-A lease can be specified when writing with the "lease" field. If given, then
-when the secret is read, Vault will report a lease with that duration. It
-is expected that the consumer of this backend properly writes renewed keys
-before the lease is up. In addition, revocation must be handled by the
-user of this backend.
+A TTL can be specified when writing with the "ttl" field. If given, the
+duration of leases returned by this backend will be set to this value. This
+can be used as a hint from the writer of a secret to the consumer of a secret
+that the consumer should re-read the value before the TTL has expired.
+However, any revocation must be handled by the user of this backend; the lease
+duration does not affect the provided data in any way.
 `

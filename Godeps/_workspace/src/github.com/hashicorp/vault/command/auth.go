@@ -34,10 +34,11 @@ type AuthCommand struct {
 
 func (c *AuthCommand) Run(args []string) int {
 	var method string
-	var methods, methodHelp bool
+	var methods, methodHelp, noVerify bool
 	flags := c.Meta.FlagSet("auth", FlagSetDefault)
 	flags.BoolVar(&methods, "methods", false, "")
 	flags.BoolVar(&methodHelp, "method-help", false, "")
+	flags.BoolVar(&noVerify, "no-verify", false, "")
 	flags.StringVar(&method, "method", "", "method")
 	flags.Usage = func() { c.Ui.Error(c.Help()) }
 	if err := flags.Parse(args); err != nil {
@@ -92,7 +93,7 @@ func (c *AuthCommand) Run(args []string) int {
 
 	if handler == nil {
 		methods := make([]string, 0, len(c.Handlers))
-		for k, _ := range c.Handlers {
+		for k := range c.Handlers {
 			methods = append(methods, k)
 		}
 		sort.Strings(methods)
@@ -170,6 +171,14 @@ func (c *AuthCommand) Run(args []string) int {
 		return 1
 	}
 
+	if noVerify {
+		c.Ui.Output(fmt.Sprintf(
+			"Authenticated - no token verification has been performed.",
+		))
+
+		return 0
+	}
+
 	// Verify the token
 	secret, err := client.Logical().Read("auth/token/lookup-self")
 	if err != nil {
@@ -192,11 +201,16 @@ func (c *AuthCommand) Run(args []string) int {
 		policies = append(policies, v.(string))
 	}
 
-	c.Ui.Output(fmt.Sprintf(
-		"Successfully authenticated! The policies that are associated\n"+
-			"with this token are listed below:\n\n%s",
-		strings.Join(policies, ", "),
-	))
+	output := "Successfully authenticated!"
+	if secret.LeaseDuration > 0 {
+		output += fmt.Sprintf("\nThe token's lifetime is %d seconds.", secret.LeaseDuration)
+	}
+
+	if len(policies) > 0 {
+		output += fmt.Sprintf("\nThe policies that are associated with this token\narelisted below:\n\n%s", strings.Join(policies, ", "))
+	}
+
+	c.Ui.Output(output)
 
 	return 0
 }
@@ -217,7 +231,7 @@ func (c *AuthCommand) listMethods() int {
 	}
 
 	paths := make([]string, 0, len(auth))
-	for path, _ := range auth {
+	for path := range auth {
 		paths = append(paths, path)
 	}
 	sort.Strings(paths)
@@ -272,6 +286,9 @@ Auth Options:
   -method-help      If set, the help for the selected method will be shown.
 
   -methods          List the available auth methods.
+
+  -no-verify        Do not verify the token after creation; avoids a use count
+                    decrement.
 
 `
 	return strings.TrimSpace(helpText)

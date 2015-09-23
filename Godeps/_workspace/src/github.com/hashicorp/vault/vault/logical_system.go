@@ -5,8 +5,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/fatih/structs"
 	"github.com/hashicorp/vault/logical"
 	"github.com/hashicorp/vault/logical/framework"
+	"github.com/mitchellh/mapstructure"
 )
 
 var (
@@ -18,8 +20,11 @@ var (
 	}
 )
 
-func NewSystemBackend(core *Core) logical.Backend {
-	b := &SystemBackend{Core: core}
+func NewSystemBackend(core *Core, config *logical.BackendConfig) logical.Backend {
+	b := &SystemBackend{
+		Core: core,
+	}
+
 	b.Backend = &framework.Backend{
 		Help: strings.TrimSpace(sysHelpRoot),
 
@@ -41,25 +46,40 @@ func NewSystemBackend(core *Core) logical.Backend {
 
 		Paths: []*framework.Path{
 			&framework.Path{
-				Pattern: "mounts$",
-
-				Callbacks: map[logical.Operation]framework.OperationFunc{
-					logical.ReadOperation: b.handleMountTable,
-				},
-
-				HelpSynopsis:    strings.TrimSpace(sysHelp["mounts"][0]),
-				HelpDescription: strings.TrimSpace(sysHelp["mounts"][1]),
-			},
-
-			&framework.Path{
-				Pattern: "mounts/(?P<path>.+)",
+				Pattern: "mounts/(?P<path>.+?)/tune$",
 
 				Fields: map[string]*framework.FieldSchema{
 					"path": &framework.FieldSchema{
 						Type:        framework.TypeString,
 						Description: strings.TrimSpace(sysHelp["mount_path"][0]),
 					},
+					"default_lease_ttl": &framework.FieldSchema{
+						Type:        framework.TypeDurationSecond,
+						Description: strings.TrimSpace(sysHelp["tune_default_lease_ttl"][0]),
+					},
+					"max_lease_ttl": &framework.FieldSchema{
+						Type:        framework.TypeDurationSecond,
+						Description: strings.TrimSpace(sysHelp["tune_max_lease_ttl"][0]),
+					},
+				},
 
+				Callbacks: map[logical.Operation]framework.OperationFunc{
+					logical.ReadOperation:  b.handleMountConfig,
+					logical.WriteOperation: b.handleMountTune,
+				},
+
+				HelpSynopsis:    strings.TrimSpace(sysHelp["mount_tune"][0]),
+				HelpDescription: strings.TrimSpace(sysHelp["mount_tune"][1]),
+			},
+
+			&framework.Path{
+				Pattern: "mounts/(?P<path>.+?)",
+
+				Fields: map[string]*framework.FieldSchema{
+					"path": &framework.FieldSchema{
+						Type:        framework.TypeString,
+						Description: strings.TrimSpace(sysHelp["mount_path"][0]),
+					},
 					"type": &framework.FieldSchema{
 						Type:        framework.TypeString,
 						Description: strings.TrimSpace(sysHelp["mount_type"][0]),
@@ -67,6 +87,10 @@ func NewSystemBackend(core *Core) logical.Backend {
 					"description": &framework.FieldSchema{
 						Type:        framework.TypeString,
 						Description: strings.TrimSpace(sysHelp["mount_desc"][0]),
+					},
+					"config": &framework.FieldSchema{
+						Type:        framework.TypeMap,
+						Description: strings.TrimSpace(sysHelp["mount_config"][0]),
 					},
 				},
 
@@ -77,6 +101,17 @@ func NewSystemBackend(core *Core) logical.Backend {
 
 				HelpSynopsis:    strings.TrimSpace(sysHelp["mount"][0]),
 				HelpDescription: strings.TrimSpace(sysHelp["mount"][1]),
+			},
+
+			&framework.Path{
+				Pattern: "mounts$",
+
+				Callbacks: map[logical.Operation]framework.OperationFunc{
+					logical.ReadOperation: b.handleMountTable,
+				},
+
+				HelpSynopsis:    strings.TrimSpace(sysHelp["mounts"][0]),
+				HelpDescription: strings.TrimSpace(sysHelp["mounts"][1]),
 			},
 
 			&framework.Path{
@@ -316,6 +351,9 @@ func NewSystemBackend(core *Core) logical.Backend {
 			},
 		},
 	}
+
+	b.Backend.Setup(config)
+
 	return b.Backend
 }
 
@@ -337,9 +375,10 @@ func (b *SystemBackend) handleMountTable(
 		Data: make(map[string]interface{}),
 	}
 	for _, entry := range b.Core.mounts.Entries {
-		info := map[string]string{
+		info := map[string]interface{}{
 			"type":        entry.Type,
 			"description": entry.Description,
+			"config":      structs.Map(entry.Config),
 		}
 		resp.Data[entry.Path] = info
 	}
@@ -355,6 +394,17 @@ func (b *SystemBackend) handleMount(
 	logicalType := data.Get("type").(string)
 	description := data.Get("description").(string)
 
+	var config MountConfig
+	configMap := data.Get("config").(map[string]interface{})
+	if configMap != nil && len(configMap) != 0 {
+		err := mapstructure.Decode(configMap, &config)
+		if err != nil {
+			return logical.ErrorResponse(
+					"unable to convert given mount config information"),
+				logical.ErrInvalidRequest
+		}
+	}
+
 	if logicalType == "" {
 		return logical.ErrorResponse(
 				"backend type must be specified as a string"),
@@ -366,14 +416,27 @@ func (b *SystemBackend) handleMount(
 		Path:        path,
 		Type:        logicalType,
 		Description: description,
+		Config:      config,
 	}
 
 	// Attempt mount
 	if err := b.Core.mount(me); err != nil {
 		b.Backend.Logger().Printf("[ERR] sys: mount %#v failed: %v", me, err)
+		return handleError(err)
+	}
+
+	return nil, nil
+}
+
+// used to intercept an HTTPCodedError so it goes back to callee
+func handleError(
+	err error) (*logical.Response, error) {
+	switch err.(type) {
+	case logical.HTTPCodedError:
+		return logical.ErrorResponse(err.Error()), err
+	default:
 		return logical.ErrorResponse(err.Error()), logical.ErrInvalidRequest
 	}
-	return nil, nil
 }
 
 // handleUnmount is used to unmount a path
@@ -387,7 +450,7 @@ func (b *SystemBackend) handleUnmount(
 	// Attempt unmount
 	if err := b.Core.unmount(suffix); err != nil {
 		b.Backend.Logger().Printf("[ERR] sys: unmount '%s' failed: %v", suffix, err)
-		return logical.ErrorResponse(err.Error()), logical.ErrInvalidRequest
+		return handleError(err)
 	}
 
 	return nil, nil
@@ -408,7 +471,94 @@ func (b *SystemBackend) handleRemount(
 	// Attempt remount
 	if err := b.Core.remount(fromPath, toPath); err != nil {
 		b.Backend.Logger().Printf("[ERR] sys: remount '%s' to '%s' failed: %v", fromPath, toPath, err)
-		return logical.ErrorResponse(err.Error()), logical.ErrInvalidRequest
+		return handleError(err)
+	}
+
+	return nil, nil
+}
+
+// handleMountConfig is used to get config settings on a backend
+func (b *SystemBackend) handleMountConfig(
+	req *logical.Request, data *framework.FieldData) (*logical.Response, error) {
+	path := data.Get("path").(string)
+	if path == "" {
+		return logical.ErrorResponse(
+				"path must be specified as a string"),
+			logical.ErrInvalidRequest
+	}
+
+	if !strings.HasSuffix(path, "/") {
+		path += "/"
+	}
+
+	sysView := b.Core.router.MatchingSystemView(path)
+	if sysView == nil {
+		err := fmt.Errorf("[ERR] sys: cannot fetch sysview for path %s", path)
+		b.Backend.Logger().Print(err)
+		return handleError(err)
+	}
+
+	def := sysView.DefaultLeaseTTL()
+
+	max := sysView.MaxLeaseTTL()
+
+	resp := &logical.Response{
+		Data: map[string]interface{}{
+			"default_lease_ttl": def,
+			"max_lease_ttl":     max,
+		},
+	}
+
+	return resp, nil
+}
+
+// handleMountTune is used to set config settings on a backend
+func (b *SystemBackend) handleMountTune(
+	req *logical.Request, data *framework.FieldData) (*logical.Response, error) {
+	path := data.Get("path").(string)
+	if path == "" {
+		return logical.ErrorResponse(
+				"path must be specified as a string"),
+			logical.ErrInvalidRequest
+	}
+
+	if !strings.HasSuffix(path, "/") {
+		path += "/"
+	}
+
+	// Prevent protected paths from being changed
+	for _, p := range untunableMounts {
+		if strings.HasPrefix(path, p) {
+			err := fmt.Errorf("[ERR] core: cannot tune '%s'", path)
+			b.Backend.Logger().Print(err)
+			return handleError(err)
+		}
+	}
+
+	mountEntry := b.Core.router.MatchingMountEntry(path)
+	if mountEntry == nil {
+		err := fmt.Errorf("[ERR] sys: tune of path '%s' failed: no mount entry found", path)
+		b.Backend.Logger().Print(err)
+		return handleError(err)
+	}
+
+	// Timing configuration parameters
+	{
+		var newDefault, newMax *time.Duration
+		if defTTLInt, ok := data.GetOk("default_lease_ttl"); ok {
+			def := time.Duration(defTTLInt.(int))
+			newDefault = &def
+		}
+		if maxTTLInt, ok := data.GetOk("max_lease_ttl"); ok {
+			max := time.Duration(maxTTLInt.(int))
+			newMax = &max
+		}
+		if newDefault != nil || newMax != nil {
+			if err := b.tuneMountTTLs(path, &mountEntry.Config, newDefault, newMax); err != nil {
+				b.Backend.Logger().Printf("[ERR] sys: tune of path '%s' failed: %v", path, err)
+				return handleError(err)
+			}
+		}
 	}
 
 	return nil, nil
@@ -428,7 +578,7 @@ func (b *SystemBackend) handleRenew(
 	resp, err := b.Core.expiration.Renew(leaseID, increment)
 	if err != nil {
 		b.Backend.Logger().Printf("[ERR] sys: renew '%s' failed: %v", leaseID, err)
-		return logical.ErrorResponse(err.Error()), logical.ErrInvalidRequest
+		return handleError(err)
 	}
 	return resp, err
 }
@@ -442,7 +592,7 @@ func (b *SystemBackend) handleRevoke(
 	// Invoke the expiration manager directly
 	if err := b.Core.expiration.Revoke(leaseID); err != nil {
 		b.Backend.Logger().Printf("[ERR] sys: revoke '%s' failed: %v", leaseID, err)
-		return logical.ErrorResponse(err.Error()), logical.ErrInvalidRequest
+		return handleError(err)
 	}
 	return nil, nil
 }
@@ -456,7 +606,7 @@ func (b *SystemBackend) handleRevokePrefix(
 	// Invoke the expiration manager directly
 	if err := b.Core.expiration.RevokePrefix(prefix); err != nil {
 		b.Backend.Logger().Printf("[ERR] sys: revoke prefix '%s' failed: %v", prefix, err)
-		return logical.ErrorResponse(err.Error()), logical.ErrInvalidRequest
+		return handleError(err)
 	}
 	return nil, nil
 }
@@ -504,7 +654,7 @@ func (b *SystemBackend) handleEnableAuth(
 	// Attempt enabling
 	if err := b.Core.enableCredential(me); err != nil {
 		b.Backend.Logger().Printf("[ERR] sys: enable auth %#v failed: %v", me, err)
-		return logical.ErrorResponse(err.Error()), logical.ErrInvalidRequest
+		return handleError(err)
 	}
 	return nil, nil
 }
@@ -520,7 +670,7 @@ func (b *SystemBackend) handleDisableAuth(
 	// Attempt disable
 	if err := b.Core.disableCredential(suffix); err != nil {
 		b.Backend.Logger().Printf("[ERR] sys: disable auth '%s' failed: %v", suffix, err)
-		return logical.ErrorResponse(err.Error()), logical.ErrInvalidRequest
+		return handleError(err)
 	}
 	return nil, nil
 }
@@ -543,7 +693,7 @@ func (b *SystemBackend) handlePolicyRead(
 
 	policy, err := b.Core.policy.GetPolicy(name)
 	if err != nil {
-		return logical.ErrorResponse(err.Error()), logical.ErrInvalidRequest
+		return handleError(err)
 	}
 
 	if policy == nil {
@@ -567,7 +717,7 @@ func (b *SystemBackend) handlePolicySet(
 	// Validate the rules parse
 	parse, err := Parse(rules)
 	if err != nil {
-		return logical.ErrorResponse(err.Error()), logical.ErrInvalidRequest
+		return handleError(err)
 	}
 
 	// Override the name
@@ -575,7 +725,7 @@ func (b *SystemBackend) handlePolicySet(
 
 	// Update the policy
 	if err := b.Core.policy.SetPolicy(parse); err != nil {
-		return logical.ErrorResponse(err.Error()), logical.ErrInvalidRequest
+		return handleError(err)
 	}
 	return nil, nil
 }
@@ -585,7 +735,7 @@ func (b *SystemBackend) handlePolicyDelete(
 	req *logical.Request, data *framework.FieldData) (*logical.Response, error) {
 	name := data.Get("name").(string)
 	if err := b.Core.policy.DeletePolicy(name); err != nil {
-		return logical.ErrorResponse(err.Error()), logical.ErrInvalidRequest
+		return handleError(err)
 	}
 	return nil, nil
 }
@@ -640,7 +790,7 @@ func (b *SystemBackend) handleEnableAudit(
 	// Attempt enabling
 	if err := b.Core.enableAudit(me); err != nil {
 		b.Backend.Logger().Printf("[ERR] sys: enable audit %#v failed: %v", me, err)
-		return logical.ErrorResponse(err.Error()), logical.ErrInvalidRequest
+		return handleError(err)
 	}
 	return nil, nil
 }
@@ -653,7 +803,7 @@ func (b *SystemBackend) handleDisableAudit(
 	// Attempt disable
 	if err := b.Core.disableAudit(path); err != nil {
 		b.Backend.Logger().Printf("[ERR] sys: disable audit '%s' failed: %v", path, err)
-		return logical.ErrorResponse(err.Error()), logical.ErrInvalidRequest
+		return handleError(err)
 	}
 	return nil, nil
 }
@@ -673,7 +823,7 @@ func (b *SystemBackend) handleRawRead(
 
 	entry, err := b.Core.barrier.Get(path)
 	if err != nil {
-		return logical.ErrorResponse(err.Error()), logical.ErrInvalidRequest
+		return handleError(err)
 	}
 	if entry == nil {
 		return nil, nil
@@ -724,7 +874,7 @@ func (b *SystemBackend) handleRawDelete(
 	}
 
 	if err := b.Core.barrier.Delete(path); err != nil {
-		return logical.ErrorResponse(err.Error()), logical.ErrInvalidRequest
+		return handleError(err)
 	}
 	return nil, nil
 }
@@ -754,11 +904,11 @@ func (b *SystemBackend) handleRotate(
 	newTerm, err := b.Core.barrier.Rotate()
 	if err != nil {
 		b.Backend.Logger().Printf("[ERR] sys: failed to create new encryption key: %v", err)
-		return logical.ErrorResponse(err.Error()), logical.ErrInvalidRequest
+		return handleError(err)
 	}
 	b.Backend.Logger().Printf("[INFO] sys: installed new encryption key")
 
-	// In non-HA mode, we need to an upgrade path for the standby instances
+	// In HA mode, we need to an upgrade path for the standby instances
 	if b.Core.ha != nil {
 		// Create the upgrade path to the new term
 		if err := b.Core.barrier.CreateUpgrade(newTerm); err != nil {
@@ -816,6 +966,19 @@ west coast.
 		"",
 	},
 
+	"mount_config": {
+		`Configuration for this mount, such as default_lease_ttl
+and max_lease_ttl.`,
+	},
+
+	"tune_default_lease_ttl": {
+		`The default lease TTL for this mount.`,
+	},
+
+	"tune_max_lease_ttl": {
+		`The max lease TTL for this mount.`,
+	},
+
 	"remount": {
 		"Move the mount point of an already-mounted backend.",
 		`
@@ -831,6 +994,10 @@ Change the mount point of an already-mounted backend.
 	"remount_to": {
 		"",
 		"",
+	},
+
+	"mount_tune": {
+		"Tune backend configuration parameters for this mount.",
 	},
 
 	"renew": {

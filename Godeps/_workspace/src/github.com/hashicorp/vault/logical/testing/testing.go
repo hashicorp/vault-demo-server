@@ -126,6 +126,7 @@ func Test(t TestT, c TestCase) {
 				return c.Factory(conf)
 			},
 		},
+		DisableMlock: true,
 	})
 	if err != nil {
 		t.Fatal("error initializing core: ", err)
@@ -166,7 +167,11 @@ func Test(t TestT, c TestCase) {
 
 	// Mount the backend
 	prefix := "mnt"
-	if err := client.Sys().Mount(prefix, "test", "acceptance test"); err != nil {
+	mountInfo := &api.Mount{
+		Type:        "test",
+		Description: "acceptance test",
+	}
+	if err := client.Sys().Mount(prefix, mountInfo); err != nil {
 		t.Fatal("error mounting backend: ", err)
 		return
 	}
@@ -204,7 +209,18 @@ func Test(t TestT, c TestCase) {
 				Path:      "sys/revoke/" + resp.Secret.LeaseID,
 			})
 		}
-		if err == nil && resp.IsError() && !s.ErrorOk {
+		// If it's an error, but an error is expected, and one is also
+		// returned as a logical.ErrorResponse, let it go to the check
+		if err != nil {
+			if !resp.IsError() || (resp.IsError() && !s.ErrorOk) {
+				t.Error(fmt.Sprintf("Failed step %d: %s", i+1, err))
+				break
+			}
+			// Set it to nil here as we're catching on the
+			// logical.ErrorResponse instead
+			err = nil
+		}
+		if resp.IsError() && !s.ErrorOk {
 			err = fmt.Errorf("Erroneous response:\n\n%#v", resp)
 		}
 		if err == nil && s.Check != nil {

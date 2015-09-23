@@ -44,13 +44,15 @@ type TokenStore struct {
 	salt *salt.Salt
 
 	expiration *ExpirationManager
+
+	cubbyholeBackend *CubbyholeBackend
 }
 
 // NewTokenStore is used to construct a token store that is
 // backed by the given barrier view.
-func NewTokenStore(c *Core) (*TokenStore, error) {
+func NewTokenStore(c *Core, config *logical.BackendConfig) (*TokenStore, error) {
 	// Create a sub-view
-	view := c.systemView.SubView(tokenSubPath)
+	view := c.systemBarrierView.SubView(tokenSubPath)
 
 	// Initialize the store
 	t := &TokenStore{
@@ -58,7 +60,9 @@ func NewTokenStore(c *Core) (*TokenStore, error) {
 	}
 
 	// Setup the salt
-	salt, err := salt.NewSalt(view, nil)
+	salt, err := salt.NewSalt(view, &salt.Config{
+		HashFunc: salt.SHA1Hash,
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -74,10 +78,7 @@ func NewTokenStore(c *Core) (*TokenStore, error) {
 		PathsSpecial: &logical.Paths{
 			Root: []string{
 				"revoke-prefix/*",
-			},
-
-			Unauthenticated: []string{
-				"lookup-self",
+				"revoke-orphan/*",
 			},
 		},
 
@@ -127,6 +128,17 @@ func NewTokenStore(c *Core) (*TokenStore, error) {
 
 				HelpSynopsis:    strings.TrimSpace(tokenLookupHelp),
 				HelpDescription: strings.TrimSpace(tokenLookupHelp),
+			},
+
+			&framework.Path{
+				Pattern: "revoke-self",
+
+				Callbacks: map[logical.Operation]framework.OperationFunc{
+					logical.WriteOperation: t.handleRevokeSelf,
+				},
+
+				HelpSynopsis:    strings.TrimSpace(tokenRevokeSelfHelp),
+				HelpDescription: strings.TrimSpace(tokenRevokeSelfHelp),
 			},
 
 			&framework.Path{
@@ -207,25 +219,29 @@ func NewTokenStore(c *Core) (*TokenStore, error) {
 		},
 	}
 
+	t.Backend.Setup(config)
+
 	return t, nil
 }
 
 // TokenEntry is used to represent a given token
 type TokenEntry struct {
-	ID          string            // ID of this entry, generally a random UUID
-	Parent      string            // Parent token, used for revocation trees
-	Policies    []string          // Which named policies should be used
-	Path        string            // Used for audit trails, this is something like "auth/user/login"
-	Meta        map[string]string // Used for auditing. This could include things like "source", "user", "ip"
-	DisplayName string            // Used for operators to be able to associate with the source
-	NumUses     int               // Used to restrict the number of uses (zero is unlimited). This is to support one-time-tokens (generalized).
+	ID           string            // ID of this entry, generally a random UUID
+	Parent       string            // Parent token, used for revocation trees
+	Policies     []string          // Which named policies should be used
+	Path         string            // Used for audit trails, this is something like "auth/user/login"
+	Meta         map[string]string // Used for auditing. This could include things like "source", "user", "ip"
+	DisplayName  string            // Used for operators to be able to associate with the source
+	NumUses      int               // Used to restrict the number of uses (zero is unlimited). This is to support one-time-tokens (generalized).
+	CreationTime int64             // Time of token creation
+	TTL          time.Duration     // Duration set when token was created
 }
 
 // SetExpirationManager is used to provide the token store with
 // an expiration manager. This is used to manage prefix based revocation
 // of tokens and to cleanup entries when removed from the token store.
-func (t *TokenStore) SetExpirationManager(exp *ExpirationManager) {
-	t.expiration = exp
+func (ts *TokenStore) SetExpirationManager(exp *ExpirationManager) {
+	ts.expiration = exp
 }
 
 // SaltID is used to apply a salt and hash to an ID to make sure its not reversable
@@ -236,9 +252,10 @@ func (ts *TokenStore) SaltID(id string) string {
 // RootToken is used to generate a new token with root privileges and no parent
 func (ts *TokenStore) RootToken() (*TokenEntry, error) {
 	te := &TokenEntry{
-		Policies:    []string{"root"},
-		Path:        "auth/token/root",
-		DisplayName: "root",
+		Policies:     []string{"root"},
+		Path:         "auth/token/root",
+		DisplayName:  "root",
+		CreationTime: time.Now().Unix(),
 	}
 	if err := ts.Create(te); err != nil {
 		return nil, err
@@ -368,6 +385,7 @@ func (ts *TokenStore) Revoke(id string) error {
 	if id == "" {
 		return fmt.Errorf("cannot revoke blank token")
 	}
+
 	return ts.revokeSalted(ts.SaltID(id))
 }
 
@@ -400,6 +418,13 @@ func (ts *TokenStore) revokeSalted(saltedId string) error {
 			return err
 		}
 	}
+
+	// Destroy the cubby space
+	err = ts.destroyCubbyhole(saltedId)
+	if err != nil {
+		return err
+	}
+
 	return nil
 }
 
@@ -464,8 +489,8 @@ func (ts *TokenStore) handleCreate(
 			logical.ErrInvalidRequest
 	}
 
-	// Check if the parent policy is root
-	isRoot := strListContains(parent.Policies, "root")
+	// Check if the client token has sudo/root privileges for the requested path
+	isSudo := ts.System().SudoPrivilege(req.MountPoint+req.Path, req.ClientToken)
 
 	// Read and parse the fields
 	var data struct {
@@ -490,11 +515,12 @@ func (ts *TokenStore) handleCreate(
 
 	// Setup the token entry
 	te := TokenEntry{
-		Parent:      req.ClientToken,
-		Path:        "auth/token/create",
-		Meta:        data.Metadata,
-		DisplayName: "token",
-		NumUses:     data.NumUses,
+		Parent:       req.ClientToken,
+		Path:         "auth/token/create",
+		Meta:         data.Metadata,
+		DisplayName:  "token",
+		NumUses:      data.NumUses,
+		CreationTime: time.Now().Unix(),
 	}
 
 	// Attach the given display name if any
@@ -505,28 +531,28 @@ func (ts *TokenStore) handleCreate(
 		te.DisplayName = full
 	}
 
-	// Allow specifying the ID of the token if the client is root
+	// Allow specifying the ID of the token if the client has root or sudo privileges
 	if data.ID != "" {
-		if !isRoot {
-			return logical.ErrorResponse("root required to specify token id"),
+		if !isSudo {
+			return logical.ErrorResponse("root or sudo privileges required to specify token id"),
 				logical.ErrInvalidRequest
 		}
 		te.ID = data.ID
 	}
 
-	// Only permit policies to be a subset unless the client is root
+	// Only permit policies to be a subset unless the client has root or sudo privileges
 	if len(data.Policies) == 0 {
 		data.Policies = parent.Policies
 	}
-	if !isRoot && !strListSubset(parent.Policies, data.Policies) {
+	if !isSudo && !strListSubset(parent.Policies, data.Policies) {
 		return logical.ErrorResponse("child policies must be subset of parent"), logical.ErrInvalidRequest
 	}
 	te.Policies = data.Policies
 
-	// Only allow an orphan token if the client is root
+	// Only allow an orphan token if the client has sudo policy
 	if data.NoParent {
-		if !isRoot {
-			return logical.ErrorResponse("root required to create orphan token"),
+		if !isSudo {
+			return logical.ErrorResponse("root or sudo privileges required to create orphan token"),
 				logical.ErrInvalidRequest
 		}
 
@@ -534,7 +560,6 @@ func (ts *TokenStore) handleCreate(
 	}
 
 	// Parse the lease if any
-	var leaseDuration time.Duration
 	if data.Lease != "" {
 		dur, err := time.ParseDuration(data.Lease)
 		if err != nil {
@@ -543,7 +568,19 @@ func (ts *TokenStore) handleCreate(
 		if dur < 0 {
 			return logical.ErrorResponse("lease must be positive"), logical.ErrInvalidRequest
 		}
-		leaseDuration = dur
+		te.TTL = dur
+	}
+
+	sysView := ts.System()
+
+	// Set the default lease if non-provided, root tokens are exempt
+	if te.TTL == 0 && !strListContains(te.Policies, "root") {
+		te.TTL = sysView.DefaultLeaseTTL()
+	}
+
+	// Limit the lease duration
+	if te.TTL > sysView.MaxLeaseTTL() {
+		te.TTL = sysView.MaxLeaseTTL()
 	}
 
 	// Create the token
@@ -558,15 +595,28 @@ func (ts *TokenStore) handleCreate(
 			Policies:    te.Policies,
 			Metadata:    te.Meta,
 			LeaseOptions: logical.LeaseOptions{
-				Lease:            leaseDuration,
-				LeaseGracePeriod: leaseDuration / 10,
-				Renewable:        leaseDuration > 0,
+				TTL:         te.TTL,
+				GracePeriod: te.TTL / 10,
+				// Tokens are renewable only if user provides lease duration
+				Renewable: te.TTL > 0,
 			},
 			ClientToken: te.ID,
 		},
 	}
 
 	return resp, nil
+}
+
+// handleRevokeSelf handles the auth/token/revoke-self path for revocation of tokens
+// in a way that revokes all child tokens. Normally, using sys/revoke/leaseID will revoke
+// the token and all children anyways, but that is only available when there is a lease.
+func (ts *TokenStore) handleRevokeSelf(
+	req *logical.Request, data *framework.FieldData) (*logical.Response, error) {
+	// Revoke the token and its children
+	if err := ts.RevokeTree(req.ClientToken); err != nil {
+		return logical.ErrorResponse(err.Error()), logical.ErrInvalidRequest
+	}
+	return nil, nil
 }
 
 // handleRevokeTree handles the auth/token/revoke/id path for revocation of tokens
@@ -595,6 +645,22 @@ func (ts *TokenStore) handleRevokeOrphan(
 	id := data.Get("token").(string)
 	if id == "" {
 		return logical.ErrorResponse("missing token ID"), logical.ErrInvalidRequest
+	}
+
+	parent, err := ts.Lookup(req.ClientToken)
+	if err != nil {
+		return logical.ErrorResponse(fmt.Sprintf("parent token lookup failed: %s", err.Error())), logical.ErrInvalidRequest
+	}
+	if parent == nil {
+		return logical.ErrorResponse("parent token lookup failed"), logical.ErrInvalidRequest
+	}
+
+	// Check if the client token has sudo/root privileges for the requested path
+	isSudo := ts.System().SudoPrivilege(req.MountPoint+req.Path, req.ClientToken)
+
+	if !isSudo {
+		return logical.ErrorResponse("root or sudo privileges required to revoke and orphan"),
+			logical.ErrInvalidRequest
 	}
 
 	// Revoke and orphan
@@ -648,12 +714,14 @@ func (ts *TokenStore) handleLookup(
 	// you could escalade your privileges.
 	resp := &logical.Response{
 		Data: map[string]interface{}{
-			"id":           out.ID,
-			"policies":     out.Policies,
-			"path":         out.Path,
-			"meta":         out.Meta,
-			"display_name": out.DisplayName,
-			"num_uses":     out.NumUses,
+			"id":            out.ID,
+			"policies":      out.Policies,
+			"path":          out.Path,
+			"meta":          out.Meta,
+			"display_name":  out.DisplayName,
+			"num_uses":      out.NumUses,
+			"creation_time": out.CreationTime,
+			"ttl":           out.TTL,
 		},
 	}
 	return resp, nil
@@ -696,14 +764,23 @@ func (ts *TokenStore) handleRenew(
 	return resp, nil
 }
 
+func (ts *TokenStore) destroyCubbyhole(saltedID string) error {
+	if ts.cubbyholeBackend == nil {
+		// Should only ever happen in testing
+		return nil
+	}
+	return ts.cubbyholeBackend.revoke(salt.SaltID(ts.cubbyholeBackend.saltUUID, saltedID, salt.SHA1Hash))
+}
+
 const (
 	tokenBackendHelp = `The token credential backend is always enabled and builtin to Vault.
 Client tokens are used to identify a client and to allow Vault to associate policies and ACLs
 which are enforced on every request. This backend also allows for generating sub-tokens as well
-as revocation of tokens.`
+as revocation of tokens. The tokens are renewable if associated with a lease.`
 	tokenCreateHelp       = `The token create path is used to create new tokens.`
 	tokenLookupHelp       = `This endpoint will lookup a token and its properties.`
-	tokenRevokeHelp       = `This endpoint will delete the token and all of its child tokens.`
+	tokenRevokeHelp       = `This endpoint will delete the given token and all of its child tokens.`
+	tokenRevokeSelfHelp   = `This endpoint will delete the token used to call it and all of its child tokens.`
 	tokenRevokeOrphanHelp = `This endpoint will delete the token and orphan its child tokens.`
 	tokenRevokePrefixHelp = `This endpoint will delete all tokens generated under a prefix with their child tokens.`
 	tokenRenewHelp        = `This endpoint will renew the token and prevent expiration.`

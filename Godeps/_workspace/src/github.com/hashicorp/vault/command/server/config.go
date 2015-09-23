@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/hashicorp/hcl"
 	hclobj "github.com/hashicorp/hcl/hcl"
@@ -17,9 +18,14 @@ type Config struct {
 	Listeners []*Listener `hcl:"-"`
 	Backend   *Backend    `hcl:"-"`
 
-	DisableMlock bool   `hcl:"disable_mlock"`
-	StatsiteAddr string `hcl:"statsite_addr"`
-	StatsdAddr   string `hcl:"statsd_addr"`
+	DisableMlock bool `hcl:"disable_mlock"`
+
+	Telemetry *Telemetry `hcl:"telemetry"`
+
+	MaxLeaseTTL        time.Duration `hcl:"-"`
+	MaxLeaseTTLRaw     string        `hcl:"max_lease_ttl"`
+	DefaultLeaseTTL    time.Duration `hcl:"-"`
+	DefaultLeaseTTLRaw string        `hcl:"default_lease_ttl"`
 }
 
 // DevConfig is a Config that is used for dev mode of Vault.
@@ -39,6 +45,11 @@ func DevConfig() *Config {
 				},
 			},
 		},
+
+		Telemetry: &Telemetry{},
+
+		MaxLeaseTTL:     30 * 24 * time.Hour,
+		DefaultLeaseTTL: 30 * 24 * time.Hour,
 	}
 }
 
@@ -63,6 +74,18 @@ func (b *Backend) GoString() string {
 	return fmt.Sprintf("*%#v", *b)
 }
 
+// Telemetry is the telemetry configuration for the server
+type Telemetry struct {
+	StatsiteAddr string `hcl:"statsite_address"`
+	StatsdAddr   string `hcl:"statsd_address"`
+
+	DisableHostname bool `hcl:"disable_hostname"`
+}
+
+func (s *Telemetry) GoString() string {
+	return fmt.Sprintf("*%#v", *s)
+}
+
 // Merge merges two configurations.
 func (c *Config) Merge(c2 *Config) *Config {
 	result := new(Config)
@@ -78,11 +101,26 @@ func (c *Config) Merge(c2 *Config) *Config {
 		result.Backend = c2.Backend
 	}
 
-	if c2.StatsiteAddr != "" {
-		result.StatsiteAddr = c2.StatsiteAddr
+	result.Telemetry = c.Telemetry
+	if c2.Telemetry != nil {
+		result.Telemetry = c2.Telemetry
 	}
-	if c2.StatsdAddr != "" {
-		result.StatsdAddr = c2.StatsdAddr
+
+	// merging this boolean via an OR operation
+	result.DisableMlock = c.DisableMlock
+	if c2.DisableMlock {
+		result.DisableMlock = c2.DisableMlock
+	}
+
+	// merge these integers via a MAX operation
+	result.MaxLeaseTTL = c.MaxLeaseTTL
+	if c2.MaxLeaseTTL > result.MaxLeaseTTL {
+		result.MaxLeaseTTL = c2.MaxLeaseTTL
+	}
+
+	result.DefaultLeaseTTL = c.DefaultLeaseTTL
+	if c2.DefaultLeaseTTL > result.DefaultLeaseTTL {
+		result.DefaultLeaseTTL = c2.DefaultLeaseTTL
 	}
 
 	return result
@@ -123,6 +161,17 @@ func LoadConfigFile(path string) (*Config, error) {
 		return nil, err
 	}
 
+	if result.MaxLeaseTTLRaw != "" {
+		if result.MaxLeaseTTL, err = time.ParseDuration(result.MaxLeaseTTLRaw); err != nil {
+			return nil, err
+		}
+	}
+	if result.DefaultLeaseTTLRaw != "" {
+		if result.DefaultLeaseTTL, err = time.ParseDuration(result.DefaultLeaseTTLRaw); err != nil {
+			return nil, err
+		}
+	}
+
 	if objs := obj.Get("listener", false); objs != nil {
 		result.Listeners, err = loadListeners(objs)
 		if err != nil {
@@ -136,7 +185,28 @@ func LoadConfigFile(path string) (*Config, error) {
 		}
 	}
 
+	// A little hacky but upgrades the old stats config directives to the new way
+	if result.Telemetry == nil {
+		statsdAddr := obj.Get("statsd_addr", false)
+		statsiteAddr := obj.Get("statsite_addr", false)
+
+		if statsdAddr != nil || statsiteAddr != nil {
+			result.Telemetry = &Telemetry{
+				StatsdAddr:   getString(statsdAddr),
+				StatsiteAddr: getString(statsiteAddr),
+			}
+		}
+	}
+
 	return &result, nil
+}
+
+func getString(o *hclobj.Object) string {
+	if o == nil || o.Type != hclobj.ValueTypeString {
+		return ""
+	}
+
+	return o.Value.(string)
 }
 
 // LoadConfigDir loads all the configurations in the given directory

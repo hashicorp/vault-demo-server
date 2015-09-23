@@ -3,10 +3,11 @@ package aws
 import (
 	"fmt"
 	"math/rand"
+	"regexp"
 	"time"
 
-	"github.com/hashicorp/aws-sdk-go/aws"
-	"github.com/hashicorp/aws-sdk-go/gen/iam"
+	"github.com/aws/aws-sdk-go/aws"
+	"github.com/aws/aws-sdk-go/service/iam"
 	"github.com/hashicorp/vault/logical"
 	"github.com/hashicorp/vault/logical/framework"
 )
@@ -46,7 +47,7 @@ func (b *backend) secretAccessKeysCreate(
 
 	// Generate a random username. We don't put the policy names in the
 	// username because the AWS console makes it pretty easy to see that.
-	username := fmt.Sprintf("vault-%s-%d-%d", displayName, time.Now().Unix(), rand.Int31n(10000))
+	username := fmt.Sprintf("vault-%s-%d-%d", normalizeDisplayName(displayName), time.Now().Unix(), rand.Int31n(10000))
 
 	// Write to the WAL that this user will be created. We do this before
 	// the user is created because if switch the order then the WAL put
@@ -60,7 +61,7 @@ func (b *backend) secretAccessKeysCreate(
 	}
 
 	// Create the user
-	_, err = client.CreateUser(&iam.CreateUserRequest{
+	_, err = client.CreateUser(&iam.CreateUserInput{
 		UserName: aws.String(username),
 	})
 	if err != nil {
@@ -69,7 +70,7 @@ func (b *backend) secretAccessKeysCreate(
 	}
 
 	// Add the user to all the groups
-	err = client.PutUserPolicy(&iam.PutUserPolicyRequest{
+	_, err = client.PutUserPolicy(&iam.PutUserPolicyInput{
 		UserName:       aws.String(username),
 		PolicyName:     aws.String(policyName),
 		PolicyDocument: aws.String(policy),
@@ -80,7 +81,7 @@ func (b *backend) secretAccessKeysCreate(
 	}
 
 	// Create the keys
-	keyResp, err := client.CreateAccessKey(&iam.CreateAccessKeyRequest{
+	keyResp, err := client.CreateAccessKey(&iam.CreateAccessKeyInput{
 		UserName: aws.String(username),
 	})
 	if err != nil {
@@ -97,7 +98,7 @@ func (b *backend) secretAccessKeysCreate(
 
 	// Return the info!
 	return b.Secret(SecretAccessKeyType).Response(map[string]interface{}{
-		"access_key": *keyResp.AccessKey.AccessKeyID,
+		"access_key": *keyResp.AccessKey.AccessKeyId,
 		"secret_key": *keyResp.AccessKey.SecretAccessKey,
 	}, map[string]interface{}{
 		"username": username,
@@ -140,4 +141,9 @@ func secretAccessKeysRevoke(
 	}
 
 	return nil, nil
+}
+
+func normalizeDisplayName(displayName string) string {
+	re := regexp.MustCompile("[^a-zA-Z+=,.@_-]")
+	return re.ReplaceAllString(displayName, "_")
 }

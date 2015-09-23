@@ -132,6 +132,8 @@ func (c *ServerCommand) Run(args []string) int {
 		LogicalBackends:    c.LogicalBackends,
 		Logger:             logger,
 		DisableMlock:       config.DisableMlock,
+		MaxLeaseTTL:        config.MaxLeaseTTL,
+		DefaultLeaseTTL:    config.DefaultLeaseTTL,
 	})
 	if err != nil {
 		c.Ui.Error(fmt.Sprintf("Error initializing core: %s", err))
@@ -357,12 +359,21 @@ func (c *ServerCommand) setupTelementry(config *server.Config) error {
 	*/
 	inm := metrics.NewInmemSink(10*time.Second, time.Minute)
 	metrics.DefaultInmemSignal(inm)
+
+	var telConfig *server.Telemetry
+	if config.Telemetry == nil {
+		telConfig = &server.Telemetry{}
+	} else {
+		telConfig = config.Telemetry
+	}
+
 	metricsConf := metrics.DefaultConfig("vault")
+	metricsConf.EnableHostname = !telConfig.DisableHostname
 
 	// Configure the statsite sink
 	var fanout metrics.FanoutSink
-	if config.StatsiteAddr != "" {
-		sink, err := metrics.NewStatsiteSink(config.StatsiteAddr)
+	if telConfig.StatsiteAddr != "" {
+		sink, err := metrics.NewStatsiteSink(telConfig.StatsiteAddr)
 		if err != nil {
 			return err
 		}
@@ -370,8 +381,8 @@ func (c *ServerCommand) setupTelementry(config *server.Config) error {
 	}
 
 	// Configure the statsd sink
-	if config.StatsdAddr != "" {
-		sink, err := metrics.NewStatsdSink(config.StatsdAddr)
+	if telConfig.StatsdAddr != "" {
+		sink, err := metrics.NewStatsdSink(telConfig.StatsdAddr)
 		if err != nil {
 			return err
 		}
@@ -420,7 +431,8 @@ General Options:
                       production!
 
   -log-level=info     Log verbosity. Defaults to "info", will be outputted
-                      to stderr.
+                      to stderr. Supported values: "trace", "debug", "info",
+                      "warn", "err"
 
 `
 	return strings.TrimSpace(helpText)

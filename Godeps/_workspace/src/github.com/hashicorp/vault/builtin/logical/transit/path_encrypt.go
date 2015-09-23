@@ -1,19 +1,17 @@
 package transit
 
 import (
-	"crypto/aes"
-	"crypto/cipher"
-	"crypto/rand"
 	"encoding/base64"
 	"fmt"
 
+	"github.com/hashicorp/vault/helper/certutil"
 	"github.com/hashicorp/vault/logical"
 	"github.com/hashicorp/vault/logical/framework"
 )
 
 func pathEncrypt() *framework.Path {
 	return &framework.Path{
-		Pattern: `encrypt/(?P<name>\w+)`,
+		Pattern: "encrypt/" + framework.GenericNameRegex("name"),
 		Fields: map[string]*framework.FieldSchema{
 			"name": &framework.FieldSchema{
 				Type:        framework.TypeString,
@@ -48,10 +46,10 @@ func pathEncryptWrite(
 		return logical.ErrorResponse("missing plaintext to encrypt"), logical.ErrInvalidRequest
 	}
 
-	// Decode the plaintext value
-	plaintext, err := base64.StdEncoding.DecodeString(value)
+	// Get the policy
+	p, err := getPolicy(req, name)
 	if err != nil {
-		return logical.ErrorResponse("failed to decode plaintext as base64"), logical.ErrInvalidRequest
+		return nil, err
 	}
 
 	// Decode the context if any
@@ -65,12 +63,6 @@ func pathEncryptWrite(
 		}
 	}
 
-	// Get the policy
-	p, err := getPolicy(req, name)
-	if err != nil {
-		return nil, err
-	}
-
 	// Error if invalid policy
 	if p == nil {
 		isDerived := len(context) != 0
@@ -80,54 +72,26 @@ func pathEncryptWrite(
 		}
 	}
 
-	// Derive the key that should be used
-	key, err := p.DeriveKey(context)
+	ciphertext, err := p.Encrypt(context, value)
 	if err != nil {
-		return logical.ErrorResponse(err.Error()), logical.ErrInvalidRequest
+		switch err.(type) {
+		case certutil.UserError:
+			return logical.ErrorResponse(err.Error()), logical.ErrInvalidRequest
+		case certutil.InternalError:
+			return nil, err
+		default:
+			return nil, err
+		}
 	}
 
-	// Guard against a potentially invalid cipher-mode
-	switch p.CipherMode {
-	case "aes-gcm":
-	default:
-		return logical.ErrorResponse("unsupported cipher mode"), logical.ErrInvalidRequest
+	if ciphertext == "" {
+		return nil, fmt.Errorf("empty ciphertext returned")
 	}
-
-	// Setup the cipher
-	aesCipher, err := aes.NewCipher(key)
-	if err != nil {
-		return nil, err
-	}
-
-	// Setup the GCM AEAD
-	gcm, err := cipher.NewGCM(aesCipher)
-	if err != nil {
-		return nil, err
-	}
-
-	// Compute random nonce
-	nonce := make([]byte, gcm.NonceSize())
-	_, err = rand.Read(nonce)
-	if err != nil {
-		return nil, err
-	}
-
-	// Encrypt and tag with GCM
-	out := gcm.Seal(nil, nonce, plaintext, nil)
-
-	// Place the encrypted data after the nonce
-	full := append(nonce, out...)
-
-	// Convert to base64
-	encoded := base64.StdEncoding.EncodeToString(full)
-
-	// Prepend some information
-	encoded = "vault:v0:" + encoded
 
 	// Generate the response
 	resp := &logical.Response{
 		Data: map[string]interface{}{
-			"ciphertext": encoded,
+			"ciphertext": ciphertext,
 		},
 	}
 	return resp, nil
