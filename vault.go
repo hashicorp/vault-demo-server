@@ -10,9 +10,12 @@ import (
 	"strconv"
 	"sync"
 
+	"github.com/hashicorp/vault/builtin/logical/pki"
+	"github.com/hashicorp/vault/builtin/logical/transit"
 	vaultcli "github.com/hashicorp/vault/cli"
 	vaultcommand "github.com/hashicorp/vault/command"
 	vaulthttp "github.com/hashicorp/vault/http"
+	"github.com/hashicorp/vault/logical"
 	"github.com/hashicorp/vault/physical"
 	"github.com/hashicorp/vault/vault"
 	"github.com/mitchellh/cli"
@@ -39,6 +42,11 @@ func NewClient() (*client, error) {
 		Physical: &Physical{
 			Backend: physical.NewInmem(),
 			Limit:   64000,
+		},
+
+		LogicalBackends: map[string]logical.Factory{
+			"transit": transit.Factory,
+			"pki":     pki.Factory,
 		},
 	})
 	if err != nil {
