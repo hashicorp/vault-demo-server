@@ -7,7 +7,6 @@ import (
 	"log"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"github.com/mitchellh/go-homedir"
 )
@@ -38,8 +37,7 @@ func (c *tokenCommand) Run(args []string) int {
 	}
 
 	f := flag.NewFlagSet("token-disk", flag.ContinueOnError)
-	f.StringVar(&path, "path", pathDefault, "")
-	f.Usage = func() { fmt.Fprintf(os.Stderr, c.Help()+"\n") }
+	f.StringVar(&path, "path", c.Path, "")
 	if err := f.Parse(args); err != nil {
 		fmt.Fprintf(os.Stderr, "\n%s\n", err)
 		return 1
