@@ -2,15 +2,18 @@ package command
 
 import (
 	"bufio"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/hashicorp/vault/api"
 	"github.com/hashicorp/vault/helper/kv-builder"
 	"github.com/hashicorp/vault/helper/password"
+	"github.com/hashicorp/vault/meta"
 	"github.com/mitchellh/mapstructure"
 	"github.com/ryanuber/columnize"
 )
@@ -24,7 +27,7 @@ type AuthHandler interface {
 
 // AuthCommand is a Command that handles authentication.
 type AuthCommand struct {
-	Meta
+	meta.Meta
 
 	Handlers map[string]AuthHandler
 
@@ -33,13 +36,14 @@ type AuthCommand struct {
 }
 
 func (c *AuthCommand) Run(args []string) int {
-	var method string
+	var method, authPath string
 	var methods, methodHelp, noVerify bool
-	flags := c.Meta.FlagSet("auth", FlagSetDefault)
+	flags := c.Meta.FlagSet("auth", meta.FlagSetDefault)
 	flags.BoolVar(&methods, "methods", false, "")
 	flags.BoolVar(&methodHelp, "method-help", false, "")
 	flags.BoolVar(&noVerify, "no-verify", false, "")
 	flags.StringVar(&method, "method", "", "method")
+	flags.StringVar(&authPath, "path", "", "")
 	flags.Usage = func() { c.Ui.Error(c.Help()) }
 	if err := flags.Parse(args); err != nil {
 		return 1
@@ -89,6 +93,13 @@ func (c *AuthCommand) Run(args []string) int {
 
 		handler = &tokenAuthHandler{Token: token}
 		args = nil
+
+		switch authPath {
+		case "", "auth/token":
+		default:
+			c.Ui.Error("Token authentication does not support custom paths")
+			return 1
+		}
 	}
 
 	if handler == nil {
@@ -136,6 +147,8 @@ func (c *AuthCommand) Run(args []string) int {
 			c.Ui.Error(fmt.Sprintf("Error parsing options: %s", err))
 			return 1
 		}
+	} else {
+		vars = make(map[string]string)
 	}
 
 	// Build the client so we can auth
@@ -146,10 +159,21 @@ func (c *AuthCommand) Run(args []string) int {
 		return 1
 	}
 
+	if authPath != "" {
+		vars["mount"] = authPath
+	}
+
 	// Authenticate
 	token, err := handler.Auth(client, vars)
 	if err != nil {
 		c.Ui.Error(err.Error())
+		return 1
+	}
+
+	// Cache the previous token so that it can be restored if authentication fails
+	var previousToken string
+	if previousToken, err = tokenHelper.Get(); err != nil {
+		c.Ui.Error(fmt.Sprintf("Error caching the previous token: %s\n\n", err))
 		return 1
 	}
 
@@ -163,14 +187,6 @@ func (c *AuthCommand) Run(args []string) int {
 		return 1
 	}
 
-	// Build the client again so it can read the token we just wrote
-	client, err = c.Client()
-	if err != nil {
-		c.Ui.Error(fmt.Sprintf(
-			"Error initializing client to verify the token: %s", err))
-		return 1
-	}
-
 	if noVerify {
 		c.Ui.Output(fmt.Sprintf(
 			"Authenticated - no token verification has been performed.",
@@ -179,15 +195,41 @@ func (c *AuthCommand) Run(args []string) int {
 		return 0
 	}
 
+	// Build the client again so it can read the token we just wrote
+	client, err = c.Client()
+	if err != nil {
+		c.Ui.Error(fmt.Sprintf(
+			"Error initializing client to verify the token: %s", err))
+		if err := tokenHelper.Store(previousToken); err != nil {
+			c.Ui.Error(fmt.Sprintf(
+				"Error restoring the previous token: %s\n\n"+
+					"Please reauthenticate with a valid token.",
+				err))
+		}
+		return 1
+	}
+
 	// Verify the token
 	secret, err := client.Auth().Token().LookupSelf()
 	if err != nil {
 		c.Ui.Error(fmt.Sprintf(
 			"Error validating token: %s", err))
+		if err := tokenHelper.Store(previousToken); err != nil {
+			c.Ui.Error(fmt.Sprintf(
+				"Error restoring the previous token: %s\n\n"+
+					"Please reauthenticate with a valid token.",
+				err))
+		}
 		return 1
 	}
 	if secret == nil {
 		c.Ui.Error(fmt.Sprintf("Error: Invalid token"))
+		if err := tokenHelper.Store(previousToken); err != nil {
+			c.Ui.Error(fmt.Sprintf(
+				"Error restoring the previous token: %s\n\n"+
+					"Please reauthenticate with a valid token.",
+				err))
+		}
 		return 1
 	}
 
@@ -201,16 +243,21 @@ func (c *AuthCommand) Run(args []string) int {
 		policies = append(policies, v.(string))
 	}
 
-	output := "Successfully authenticated!"
+	output := "Successfully authenticated! You are now logged in."
+	if method != "" {
+		output += "\nThe token below is already saved in the session. You do not"
+		output += "\nneed to \"vault auth\" again with the token."
+	}
 	output += fmt.Sprintf("\ntoken: %s", secret.Data["id"])
-	output += fmt.Sprintf("\ntoken_duration: %d", int(secret.Data["ttl"].(float64)))
+	output += fmt.Sprintf("\ntoken_duration: %s", secret.Data["ttl"].(json.Number).String())
 	if len(policies) > 0 {
-		output += fmt.Sprintf("\ntoken_policies: [%s]", strings.Join(policies, ", "))
+		output += fmt.Sprintf("\ntoken_policies: %v", policies)
 	}
 
 	c.Ui.Output(output)
 
 	return 0
+
 }
 
 func (c *AuthCommand) listMethods() int {
@@ -234,11 +281,23 @@ func (c *AuthCommand) listMethods() int {
 	}
 	sort.Strings(paths)
 
-	columns := []string{"Path | Type | Description"}
-	for _, k := range paths {
-		a := auth[k]
+	columns := []string{"Path | Type | Default TTL | Max TTL | Replication Behavior | Description"}
+	for _, path := range paths {
+		auth := auth[path]
+		defTTL := "system"
+		if auth.Config.DefaultLeaseTTL != 0 {
+			defTTL = strconv.Itoa(auth.Config.DefaultLeaseTTL)
+		}
+		maxTTL := "system"
+		if auth.Config.MaxLeaseTTL != 0 {
+			maxTTL = strconv.Itoa(auth.Config.MaxLeaseTTL)
+		}
+		replicatedBehavior := "replicated"
+		if auth.Local {
+			replicatedBehavior = "local"
+		}
 		columns = append(columns, fmt.Sprintf(
-			"%s | %s | %s", k, a.Type, a.Description))
+			"%s | %s | %s | %s | %s | %s", path, auth.Type, defTTL, maxTTL, replicatedBehavior, auth.Description))
 	}
 
 	c.Ui.Output(columnize.SimpleFormat(columns))
@@ -251,29 +310,37 @@ func (c *AuthCommand) Synopsis() string {
 
 func (c *AuthCommand) Help() string {
 	helpText := `
-Usage: vault auth [options] [token or config...]
+Usage: vault auth [options] [auth-information]
 
-  Authenticate with Vault with the given token or via any supported
+  Authenticate with Vault using the given token or via any supported
   authentication backend.
 
-  If no -method is specified, then the token is expected. If it is not
-  given on the command-line, it will be asked via user input. If the
-  token is "-", it will be read from stdin.
+  By default, the -method is assumed to be token. If not supplied via the
+  command-line, a prompt for input will be shown. If the authentication
+  information is "-", it will be read from stdin.
 
-  By specifying -method, alternate authentication methods can be used
-  such as OAuth or TLS certificates. For these, additional values for
-  configuration can be specified with "key=value" pairs just like
-  "vault write". Specify the "-method-help" flag to get help for a specific
-  method.
+  The -method option allows alternative authentication methods to be used,
+  such as userpass, GitHub, or TLS certificates. For these, additional
+  values as "key=value" pairs may be required. For example, to authenticate
+  to the userpass auth backend:
 
-  If you've mounted a credential backend to a different path, such
-  as mounting "github" to "github-private", the "method" flag should
-  still be "github." Most credential providers support the "mount" option
-  to specify the mount point. See the "-method-help" for more info.
+      $ vault auth -method=userpass username=my-username
+
+  Use "-method-help" to get help for a specific method.
+
+  If an auth backend is enabled at a different path, the "-method" flag
+  should still point to the canonical name, and the "-path" flag should be
+  used. If a GitHub auth backend was mounted as "github-private", one would
+  authenticate to this backend via:
+
+      $ vault auth -method=github -path=github-private
+
+  The value of the "-path" flag is supplied to auth providers as the "mount"
+  option in the payload to specify the mount point.
 
 General Options:
 
-  ` + generalOptionsUsage() + `
+  ` + meta.GeneralOptionsUsage() + `
 
 Auth Options:
 
@@ -288,6 +355,9 @@ Auth Options:
   -no-verify        Do not verify the token after creation; avoids a use count
                     decrement.
 
+  -path             The path at which the auth backend is enabled. If an auth
+                    backend is mounted at multiple paths, this option can be
+                    used to authenticate against specific paths.
 `
 	return strings.TrimSpace(helpText)
 }
@@ -329,7 +399,7 @@ func (h *tokenAuthHandler) Help() string {
 	help := `
 No method selected with the "-method" flag, so the "auth" command assumes
 you'll be using raw token authentication. For this, specify the token to
-authenticate as as the parameter to "vault auth". Example:
+authenticate as the parameter to "vault auth". Example:
 
     vault auth 123456
 

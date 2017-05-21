@@ -3,7 +3,6 @@ package cli
 import (
 	"bytes"
 	"fmt"
-	"log"
 	"sort"
 	"strings"
 
@@ -21,6 +20,7 @@ func HelpFunc(commands map[string]cli.CommandFactory) string {
 		"write":     struct{}{},
 		"server":    struct{}{},
 		"status":    struct{}{},
+		"unwrap":    struct{}{},
 	}
 
 	// Determine the maximum key length, and classify based on type
@@ -71,9 +71,7 @@ func listCommands(commands map[string]cli.CommandFactory, maxKeyLen int) string 
 
 		command, err := commandFunc()
 		if err != nil {
-			log.Printf("[ERR] cli: Command '%s' failed to load: %s",
-				key, err)
-			continue
+			panic(fmt.Sprintf("command '%s' failed to load: %s", key, err))
 		}
 
 		key = fmt.Sprintf("%s%s", key, strings.Repeat(" ", maxKeyLen-len(key)))

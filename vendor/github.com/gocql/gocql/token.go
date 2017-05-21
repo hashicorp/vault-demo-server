@@ -89,13 +89,17 @@ func (r randomPartitioner) Name() string {
 	return "RandomPartitioner"
 }
 
-func (p randomPartitioner) Hash(partitionKey []byte) token {
-	hash := md5.New()
-	sum := hash.Sum(partitionKey)
+// 2 ** 128
+var maxHashInt, _ = new(big.Int).SetString("340282366920938463463374607431768211456", 10)
 
+func (p randomPartitioner) Hash(partitionKey []byte) token {
+	sum := md5.Sum(partitionKey)
 	val := new(big.Int)
-	val = val.SetBytes(sum)
-	val = val.Abs(val)
+	val.SetBytes(sum[:])
+	if sum[0] > 127 {
+		val.Sub(val, maxHashInt)
+		val.Abs(val)
+	}
 
 	return (*randomToken)(val)
 }
@@ -180,7 +184,7 @@ func (t *tokenRing) String() string {
 		buf.WriteString("]")
 		buf.WriteString(t.tokens[i].String())
 		buf.WriteString(":")
-		buf.WriteString(t.hosts[i].Peer())
+		buf.WriteString(t.hosts[i].Peer().String())
 	}
 	buf.WriteString("\n}")
 	return string(buf.Bytes())
@@ -200,14 +204,21 @@ func (t *tokenRing) GetHostForToken(token token) *HostInfo {
 		return nil
 	}
 
+	l := len(t.tokens)
+	// no host tokens, no available hosts
+	if l == 0 {
+		return nil
+	}
+
 	// find the primary replica
 	ringIndex := sort.Search(
-		len(t.tokens),
+		l,
 		func(i int) bool {
 			return !t.tokens[i].Less(token)
 		},
 	)
-	if ringIndex == len(t.tokens) {
+
+	if ringIndex == l {
 		// wrap around to the first in the ring
 		ringIndex = 0
 	}

@@ -37,6 +37,10 @@ func goType(t TypeInfo) reflect.Type {
 		return reflect.TypeOf(*new(float64))
 	case TypeInt:
 		return reflect.TypeOf(*new(int))
+	case TypeSmallInt:
+		return reflect.TypeOf(*new(int16))
+	case TypeTinyInt:
+		return reflect.TypeOf(*new(int8))
 	case TypeDecimal:
 		return reflect.TypeOf(*new(*inf.Dec))
 	case TypeUUID, TypeTimeUUID:
@@ -53,6 +57,8 @@ func goType(t TypeInfo) reflect.Type {
 		return reflect.TypeOf(make([]interface{}, len(tuple.Elems)))
 	case TypeUDT:
 		return reflect.TypeOf(make(map[string]interface{}))
+	case TypeDate:
+		return reflect.TypeOf(*new(time.Time))
 	default:
 		return nil
 	}
@@ -60,6 +66,60 @@ func goType(t TypeInfo) reflect.Type {
 
 func dereference(i interface{}) interface{} {
 	return reflect.Indirect(reflect.ValueOf(i)).Interface()
+}
+
+func getCassandraType(name string) Type {
+	switch name {
+	case "ascii":
+		return TypeAscii
+	case "bigint":
+		return TypeBigInt
+	case "blob":
+		return TypeBlob
+	case "boolean":
+		return TypeBoolean
+	case "counter":
+		return TypeCounter
+	case "decimal":
+		return TypeDecimal
+	case "double":
+		return TypeDouble
+	case "float":
+		return TypeFloat
+	case "int":
+		return TypeInt
+	case "timestamp":
+		return TypeTimestamp
+	case "uuid":
+		return TypeUUID
+	case "varchar", "text":
+		return TypeVarchar
+	case "varint":
+		return TypeVarint
+	case "timeuuid":
+		return TypeTimeUUID
+	case "inet":
+		return TypeInet
+	case "MapType":
+		return TypeMap
+	case "ListType":
+		return TypeList
+	case "SetType":
+		return TypeSet
+	case "TupleType":
+		return TypeTuple
+	default:
+		if strings.HasPrefix(name, "set") {
+			return TypeSet
+		} else if strings.HasPrefix(name, "list") {
+			return TypeList
+		} else if strings.HasPrefix(name, "map") {
+			return TypeMap
+		} else if strings.HasPrefix(name, "tuple") {
+			return TypeTuple
+		}
+		return TypeCustom
+	}
 }
 
 func getApacheCassandraType(class string) Type {
@@ -82,6 +142,10 @@ func getApacheCassandraType(class string) Type {
 		return TypeFloat
 	case "Int32Type":
 		return TypeInt
+	case "ShortType":
+		return TypeSmallInt
+	case "ByteType":
+		return TypeTinyInt
 	case "DateType", "TimestampType":
 		return TypeTimestamp
 	case "UUIDType", "LexicalUUIDType":
@@ -187,7 +251,43 @@ func (iter *Iter) SliceMap() ([]map[string]interface{}, error) {
 }
 
 // MapScan takes a map[string]interface{} and populates it with a row
-// That is returned from cassandra.
+// that is returned from cassandra.
+//
+// Each call to MapScan() must be called with a new map object.
+// During the call to MapScan() any pointers in the existing map
+// are replaced with non pointer types before the call returns
+//
+//	iter := session.Query(`SELECT * FROM mytable`).Iter()
+//	for {
+//		// New map each iteration
+//		row = make(map[string]interface{})
+//		if !iter.MapScan(row) {
+//			break
+//		}
+//		// Do things with row
+//		if fullname, ok := row["fullname"]; ok {
+//			fmt.Printf("Full Name: %s\n", fullname)
+//		}
+//	}
+//
+// You can also pass pointers in the map before each call
+//
+//	var fullName FullName // Implements gocql.Unmarshaler and gocql.Marshaler interfaces
+//	var address net.IP
+//	var age int
+//	iter := session.Query(`SELECT * FROM scan_map_table`).Iter()
+//	for {
+//		// New map each iteration
+//		row := map[string]interface{}{
+//			"fullname": &fullName,
+//			"age":      &age,
+//			"address":  &address,
+//		}
+//		if !iter.MapScan(row) {
+//			break
+//		}
+//		fmt.Printf("First: %s Age: %d Address: %q\n", fullName.FirstName, age, address)
+//	}
 func (iter *Iter) MapScan(m map[string]interface{}) bool {
 	if iter.err != nil {
 		return false

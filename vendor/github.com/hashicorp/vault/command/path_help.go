@@ -3,15 +3,17 @@ package command
 import (
 	"fmt"
 	"strings"
+
+	"github.com/hashicorp/vault/meta"
 )
 
 // PathHelpCommand is a Command that lists the mounts.
 type PathHelpCommand struct {
-	Meta
+	meta.Meta
 }
 
 func (c *PathHelpCommand) Run(args []string) int {
-	flags := c.Meta.FlagSet("help", FlagSetDefault)
+	flags := c.Meta.FlagSet("help", meta.FlagSetDefault)
 	flags.Usage = func() { c.Ui.Error(c.Help()) }
 	if err := flags.Parse(args); err != nil {
 		return 1
@@ -38,7 +40,7 @@ func (c *PathHelpCommand) Run(args []string) int {
 		if strings.Contains(err.Error(), "Vault is sealed") {
 			c.Ui.Error(`Error: Vault is sealed.
 
-The path-help command requires the Vault to be unsealed so that
+The path-help command requires the vault to be unsealed so that
 mount points of secret backends are known.`)
 		} else {
 			c.Ui.Error(fmt.Sprintf(
@@ -65,11 +67,10 @@ Usage: vault path-help [options] path
   providers provide built-in help. This command looks up and outputs that
   help.
 
-  The command requires that the Vault be unsealed, because otherwise
+  The command requires that the vault be unsealed, because otherwise
   the mount points of the backends are unknown.
 
 General Options:
-
-  ` + generalOptionsUsage()
+` + meta.GeneralOptionsUsage()
 	return strings.TrimSpace(helpText)
 }

@@ -3,9 +3,23 @@ package ldap
 import (
 	"strings"
 
+	"github.com/hashicorp/vault/helper/policyutil"
 	"github.com/hashicorp/vault/logical"
 	"github.com/hashicorp/vault/logical/framework"
 )
+
+func pathGroupsList(b *backend) *framework.Path {
+	return &framework.Path{
+		Pattern: "groups/?$",
+
+		Callbacks: map[logical.Operation]framework.OperationFunc{
+			logical.ListOperation: b.pathGroupList,
+		},
+
+		HelpSynopsis:    pathGroupHelpSyn,
+		HelpDescription: pathGroupHelpDesc,
+	}
+}
 
 func pathGroups(b *backend) *framework.Path {
 	return &framework.Path{
@@ -25,7 +39,7 @@ func pathGroups(b *backend) *framework.Path {
 		Callbacks: map[logical.Operation]framework.OperationFunc{
 			logical.DeleteOperation: b.pathGroupDelete,
 			logical.ReadOperation:   b.pathGroupRead,
-			logical.UpdateOperation:  b.pathGroupWrite,
+			logical.UpdateOperation: b.pathGroupWrite,
 		},
 
 		HelpSynopsis:    pathGroupHelpSyn,
@@ -79,15 +93,9 @@ func (b *backend) pathGroupRead(
 
 func (b *backend) pathGroupWrite(
 	req *logical.Request, d *framework.FieldData) (*logical.Response, error) {
-	name := d.Get("name").(string)
-	policies := strings.Split(d.Get("policies").(string), ",")
-	for i, p := range policies {
-		policies[i] = strings.TrimSpace(p)
-	}
-
 	// Store it
-	entry, err := logical.StorageEntryJSON("group/"+name, &GroupEntry{
-		Policies: policies,
+	entry, err := logical.StorageEntryJSON("group/"+d.Get("name").(string), &GroupEntry{
+		Policies: policyutil.ParsePolicies(d.Get("policies").(string)),
 	})
 	if err != nil {
 		return nil, err
@@ -97,6 +105,15 @@ func (b *backend) pathGroupWrite(
 	}
 
 	return nil, nil
+}
+
+func (b *backend) pathGroupList(
+	req *logical.Request, d *framework.FieldData) (*logical.Response, error) {
+	groups, err := req.Storage.List("group/")
+	if err != nil {
+		return nil, err
+	}
+	return logical.ListResponse(groups), nil
 }
 
 type GroupEntry struct {

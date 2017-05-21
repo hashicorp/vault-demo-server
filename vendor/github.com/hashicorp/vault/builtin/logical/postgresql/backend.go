@@ -6,24 +6,20 @@ import (
 	"strings"
 	"sync"
 
+	log "github.com/mgutz/logxi/v1"
+
 	"github.com/hashicorp/vault/logical"
 	"github.com/hashicorp/vault/logical/framework"
 )
 
 func Factory(conf *logical.BackendConfig) (logical.Backend, error) {
-	return Backend().Setup(conf)
+	return Backend(conf).Setup(conf)
 }
 
-func Backend() *framework.Backend {
+func Backend(conf *logical.BackendConfig) *backend {
 	var b backend
 	b.Backend = &framework.Backend{
 		Help: strings.TrimSpace(backendHelp),
-
-		PathsSpecial: &logical.Paths{
-			Root: []string{
-				"config/*",
-			},
-		},
 
 		Paths: []*framework.Path{
 			pathConfigConnection(&b),
@@ -38,9 +34,12 @@ func Backend() *framework.Backend {
 		},
 
 		Clean: b.ResetDB,
+
+		Invalidate: b.invalidate,
 	}
 
-	return b.Backend
+	b.logger = conf.Logger
+	return &b
 }
 
 type backend struct {
@@ -48,16 +47,26 @@ type backend struct {
 
 	db   *sql.DB
 	lock sync.Mutex
+
+	logger log.Logger
 }
 
 // DB returns the database connection.
 func (b *backend) DB(s logical.Storage) (*sql.DB, error) {
+	b.logger.Trace("postgres/db: enter")
+	defer b.logger.Trace("postgres/db: exit")
+
 	b.lock.Lock()
 	defer b.lock.Unlock()
 
 	// If we already have a DB, we got it!
 	if b.db != nil {
-		return b.db, nil
+		if err := b.db.Ping(); err == nil {
+			return b.db, nil
+		}
+		// If the ping was unsuccessful, close it and ignore errors as we'll be
+		// reestablishing anyways
+		b.db.Close()
 	}
 
 	// Otherwise, attempt to make connection
@@ -106,6 +115,9 @@ func (b *backend) DB(s logical.Storage) (*sql.DB, error) {
 
 // ResetDB forces a connection next time DB() is called.
 func (b *backend) ResetDB() {
+	b.logger.Trace("postgres/resetdb: enter")
+	defer b.logger.Trace("postgres/resetdb: exit")
+
 	b.lock.Lock()
 	defer b.lock.Unlock()
 
@@ -114,6 +126,13 @@ func (b *backend) ResetDB() {
 	}
 
 	b.db = nil
+}
+
+func (b *backend) invalidate(key string) {
+	switch key {
+	case "config/connection":
+		b.ResetDB()
+	}
 }
 
 // Lease returns the lease information

@@ -1,13 +1,15 @@
 package vault
 
 import (
-	"errors"
 	"fmt"
+	"strings"
 	"time"
 )
 
 // tuneMount is used to set config on a mount point
-func (b *SystemBackend) tuneMountTTLs(path string, meConfig *MountConfig, newDefault, newMax *time.Duration) error {
+func (b *SystemBackend) tuneMountTTLs(path string, me *MountEntry, newDefault, newMax *time.Duration) error {
+	meConfig := &me.Config
+
 	if newDefault == nil && newMax == nil {
 		return nil
 	}
@@ -44,12 +46,15 @@ func (b *SystemBackend) tuneMountTTLs(path string, meConfig *MountConfig, newDef
 					int(newDefault.Seconds()), int(b.Core.maxLeaseTTL.Seconds()))
 			}
 		} else {
-			if meConfig.MaxLeaseTTL < *newDefault {
+			if newMax == nil && *newDefault > meConfig.MaxLeaseTTL {
 				return fmt.Errorf("new backend default lease TTL of %d greater than backend max lease TTL of %d",
 					int(newDefault.Seconds()), int(meConfig.MaxLeaseTTL.Seconds()))
 			}
 		}
 	}
+
+	origMax := meConfig.MaxLeaseTTL
+	origDefault := meConfig.DefaultLeaseTTL
 
 	if newMax != nil {
 		meConfig.MaxLeaseTTL = *newMax
@@ -59,11 +64,22 @@ func (b *SystemBackend) tuneMountTTLs(path string, meConfig *MountConfig, newDef
 	}
 
 	// Update the mount table
-	if err := b.Core.persistMounts(b.Core.mounts); err != nil {
-		return errors.New("failed to update mount table")
+	var err error
+	switch {
+	case strings.HasPrefix(path, "auth/"):
+		err = b.Core.persistAuth(b.Core.auth, me.Local)
+	default:
+		err = b.Core.persistMounts(b.Core.mounts, me.Local)
+	}
+	if err != nil {
+		meConfig.MaxLeaseTTL = origMax
+		meConfig.DefaultLeaseTTL = origDefault
+		return fmt.Errorf("failed to update mount table, rolling back TTL changes")
 	}
 
-	b.Core.logger.Printf("[INFO] core: tuned '%s'", path)
+	if b.Core.logger.IsInfo() {
+		b.Core.logger.Info("core: mount tuning successful", "path", path)
+	}
 
 	return nil
 }

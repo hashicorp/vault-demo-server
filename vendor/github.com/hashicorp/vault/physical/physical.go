@@ -1,8 +1,26 @@
 package physical
 
-import "fmt"
+import (
+	"fmt"
+	"sync"
+
+	log "github.com/mgutz/logxi/v1"
+)
 
 const DefaultParallelOperations = 128
+
+// The operation type
+type Operation string
+
+const (
+	DeleteOperation Operation = "delete"
+	GetOperation              = "get"
+	ListOperation             = "list"
+	PutOperation              = "put"
+)
+
+// ShutdownSignal
+type ShutdownChannel chan struct{}
 
 // Backend is the interface required for a physical
 // backend. A physical backend is used to durably store
@@ -25,21 +43,53 @@ type Backend interface {
 	List(prefix string) ([]string, error)
 }
 
-// HABackend is an extentions to the standard physical
+// HABackend is an extensions to the standard physical
 // backend to support high-availability. Vault only expects to
 // use mutual exclusion to allow multiple instances to act as a
 // hot standby for a leader that services all requests.
 type HABackend interface {
 	// LockWith is used for mutual exclusion based on the given key.
 	LockWith(key, value string) (Lock, error)
+
+	// Whether or not HA functionality is enabled
+	HAEnabled() bool
 }
 
-// AdvertiseDetect is an optional interface that an HABackend
-// can implement. If they do, an advertise address can be automatically
+// Purgable is an optional interface for backends that support
+// purging of their caches.
+type Purgable interface {
+	Purge()
+}
+
+// RedirectDetect is an optional interface that an HABackend
+// can implement. If they do, a redirect address can be automatically
 // detected.
-type AdvertiseDetect interface {
+type RedirectDetect interface {
 	// DetectHostAddr is used to detect the host address
 	DetectHostAddr() (string, error)
+}
+
+// Callback signatures for RunServiceDiscovery
+type activeFunction func() bool
+type sealedFunction func() bool
+
+// ServiceDiscovery is an optional interface that an HABackend can implement.
+// If they do, the state of a backend is advertised to the service discovery
+// network.
+type ServiceDiscovery interface {
+	// NotifyActiveStateChange is used by Core to notify a backend
+	// capable of ServiceDiscovery that this Vault instance has changed
+	// its status to active or standby.
+	NotifyActiveStateChange() error
+
+	// NotifySealedStateChange is used by Core to notify a backend
+	// capable of ServiceDiscovery that Vault has changed its Sealed
+	// status to sealed or unsealed.
+	NotifySealedStateChange() error
+
+	// Run executes any background service discovery tasks until the
+	// shutdown channel is closed.
+	RunServiceDiscovery(waitGroup *sync.WaitGroup, shutdownCh ShutdownChannel, redirectAddr string, activeFunc activeFunction, sealedFunc sealedFunction) error
 }
 
 type Lock interface {
@@ -63,36 +113,49 @@ type Entry struct {
 }
 
 // Factory is the factory function to create a physical backend.
-type Factory func(map[string]string) (Backend, error)
+type Factory func(config map[string]string, logger log.Logger) (Backend, error)
 
 // NewBackend returns a new backend with the given type and configuration.
-// The backend is looked up in the BuiltinBackends variable.
-func NewBackend(t string, conf map[string]string) (Backend, error) {
-	f, ok := BuiltinBackends[t]
+// The backend is looked up in the builtinBackends variable.
+func NewBackend(t string, logger log.Logger, conf map[string]string) (Backend, error) {
+	f, ok := builtinBackends[t]
 	if !ok {
 		return nil, fmt.Errorf("unknown physical backend type: %s", t)
 	}
-	return f(conf)
+	return f(conf, logger)
 }
 
 // BuiltinBackends is the list of built-in physical backends that can
 // be used with NewBackend.
-var BuiltinBackends = map[string]Factory{
-	"inmem": func(map[string]string) (Backend, error) {
-		return NewInmem(), nil
+var builtinBackends = map[string]Factory{
+	"inmem": func(_ map[string]string, logger log.Logger) (Backend, error) {
+		return NewInmem(logger), nil
 	},
-	"consul":     newConsulBackend,
-	"zookeeper":  newZookeeperBackend,
-	"file":       newFileBackend,
-	"s3":         newS3Backend,
-	"dynamodb":   newDynamoDBBackend,
-	"etcd":       newEtcdBackend,
-	"mysql":      newMySQLBackend,
-	"postgresql": newPostgreSQLBackend,
+	"inmem_transactional": func(_ map[string]string, logger log.Logger) (Backend, error) {
+		return NewTransactionalInmem(logger), nil
+	},
+	"inmem_ha": func(_ map[string]string, logger log.Logger) (Backend, error) {
+		return NewInmemHA(logger), nil
+	},
+	"inmem_transactional_ha": func(_ map[string]string, logger log.Logger) (Backend, error) {
+		return NewTransactionalInmemHA(logger), nil
+	},
+	"file_transactional": newTransactionalFileBackend,
+	"consul":             newConsulBackend,
+	"zookeeper":          newZookeeperBackend,
+	"file":               newFileBackend,
+	"s3":                 newS3Backend,
+	"azure":              newAzureBackend,
+	"dynamodb":           newDynamoDBBackend,
+	"etcd":               newEtcdBackend,
+	"mssql":              newMsSQLBackend,
+	"mysql":              newMySQLBackend,
+	"postgresql":         newPostgreSQLBackend,
+	"swift":              newSwiftBackend,
+	"gcs":                newGCSBackend,
 }
 
-// PermitPool is a wrapper around a semaphore library to keep things
-// agnostic
+// PermitPool is used to limit maximum outstanding requests
 type PermitPool struct {
 	sem chan int
 }

@@ -3,15 +3,17 @@ package command
 import (
 	"fmt"
 	"strings"
+
+	"github.com/hashicorp/vault/meta"
 )
 
 // AuditDisableCommand is a Command that mounts a new mount.
 type AuditDisableCommand struct {
-	Meta
+	meta.Meta
 }
 
 func (c *AuditDisableCommand) Run(args []string) int {
-	flags := c.Meta.FlagSet("mount", FlagSetDefault)
+	flags := c.Meta.FlagSet("mount", meta.FlagSetDefault)
 	flags.Usage = func() { c.Ui.Error(c.Help()) }
 	if err := flags.Parse(args); err != nil {
 		return 1
@@ -41,7 +43,8 @@ func (c *AuditDisableCommand) Run(args []string) int {
 	}
 
 	c.Ui.Output(fmt.Sprintf(
-		"Successfully disabled audit backend '%s'!", id))
+		"Successfully disabled audit backend '%s' if it was enabled", id))
+
 	return 0
 }
 
@@ -55,15 +58,14 @@ Usage: vault audit-disable [options] id
 
   Disable an audit backend.
 
-  Once the audit backend is disabled, no more audit logs will be sent to
+  Once the audit backend is disabled no more audit logs will be sent to
   it. The data associated with the audit backend isn't affected.
 
-  The "id" parameter should map to the id used with "audit-enable". If
-  no specific ID was specified, then it is the name of the backend (the
-  type of the backend).
+  The "id" parameter should map to the "path" used in "audit-enable". If
+  no path was provided to "audit-enable" you should use the backend
+  type (e.g. "file").
 
 General Options:
-
-  ` + generalOptionsUsage()
+` + meta.GeneralOptionsUsage()
 	return strings.TrimSpace(helpText)
 }

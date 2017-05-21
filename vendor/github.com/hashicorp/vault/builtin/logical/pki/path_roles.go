@@ -1,11 +1,13 @@
 package pki
 
 import (
+	"crypto/x509"
 	"fmt"
 	"strings"
 	"time"
 
 	"github.com/fatih/structs"
+	"github.com/hashicorp/vault/helper/parseutil"
 	"github.com/hashicorp/vault/logical"
 	"github.com/hashicorp/vault/logical/framework"
 )
@@ -18,8 +20,8 @@ func pathListRoles(b *backend) *framework.Path {
 			logical.ListOperation: b.pathRoleList,
 		},
 
-		HelpSynopsis:    pathRoleHelpSyn,
-		HelpDescription: pathRoleHelpDesc,
+		HelpSynopsis:    pathListRolesHelpSyn,
+		HelpDescription: pathListRolesHelpDesc,
 	}
 }
 
@@ -80,6 +82,14 @@ be considered a security threat.`,
 subdomains of the CNs allowed by the other role options,
 including wildcard subdomains. See the documentation for
 more information.`,
+			},
+
+			"allow_glob_domains": &framework.FieldSchema{
+				Type:    framework.TypeBool,
+				Default: false,
+				Description: `If set, domains specified in "allowed_domains"
+can include glob patterns, e.g. "ftp*.example.com". See
+the documentation for more information.`,
 			},
 
 			"allow_any_name": &framework.FieldSchema{
@@ -147,6 +157,17 @@ certainly want to change this if you adjust
 the key_type.`,
 			},
 
+			"key_usage": &framework.FieldSchema{
+				Type:    framework.TypeString,
+				Default: "DigitalSignature,KeyAgreement,KeyEncipherment",
+				Description: `A comma-separated set of key usages (not extended
+key usages). Valid values can be found at
+https://golang.org/pkg/crypto/x509/#KeyUsage
+-- simply drop the "KeyUsage" part of the name.
+To remove all key usages from being set, set
+this value to an empty string.`,
+			},
+
 			"use_csr_common_name": &framework.FieldSchema{
 				Type:    framework.TypeBool,
 				Default: true,
@@ -154,6 +175,53 @@ the key_type.`,
 the common name in the CSR will be used. This
 does *not* include any requested Subject Alternative
 Names. Defaults to true.`,
+			},
+
+			"use_csr_sans": &framework.FieldSchema{
+				Type:    framework.TypeBool,
+				Default: true,
+				Description: `If set, when used with a signing profile,
+the SANs in the CSR will be used. This does *not*
+include the Common Name (cn). Defaults to true.`,
+			},
+
+			"ou": &framework.FieldSchema{
+				Type:    framework.TypeString,
+				Default: "",
+				Description: `If set, the OU (OrganizationalUnit) will be set to
+this value in certificates issued by this role.`,
+			},
+
+			"organization": &framework.FieldSchema{
+				Type:    framework.TypeString,
+				Default: "",
+				Description: `If set, the O (Organization) will be set to
+this value in certificates issued by this role.`,
+			},
+
+			"generate_lease": &framework.FieldSchema{
+				Type:    framework.TypeBool,
+				Default: false,
+				Description: `
+If set, certificates issued/signed against this role will have Vault leases
+attached to them. Defaults to "false". Certificates can be added to the CRL by
+"vault revoke <lease_id>" when certificates are associated with leases.  It can
+also be done using the "pki/revoke" endpoint. However, when lease generation is
+disabled, invoking "pki/revoke" would be the only way to add the certificates
+to the CRL.  When large number of certificates are generated with long
+lifetimes, it is recommended that lease generation be disabled, as large amount of
+leases adversely affect the startup time of Vault.`,
+			},
+			"no_store": &framework.FieldSchema{
+				Type:    framework.TypeBool,
+				Default: false,
+				Description: `
+If set, certificates issued/signed against this role will not be stored in the
+in the storage backend. This can improve performance when issuing large numbers
+of certificates. However, certificates issued in this way cannot be enumerated
+or revoked, so this option is recommended only for certificates that are
+non-sensitive, or extremely short-lived. This option implies a value of "false"
+for "generate_lease".`,
 			},
 		},
 
@@ -221,6 +289,16 @@ func (b *backend) getRole(s logical.Storage, n string) (*roleEntry, error) {
 		modified = true
 	}
 
+	// Upgrade generate_lease in role
+	if result.GenerateLease == nil {
+		// All the new roles will have GenerateLease always set to a value. A
+		// nil value indicates that this role needs an upgrade. Set it to
+		// `true` to not alter its current behavior.
+		result.GenerateLease = new(bool)
+		*result.GenerateLease = true
+		modified = true
+	}
+
 	if modified {
 		jsonEntry, err := logical.StorageEntryJSON("role/"+n, &result)
 		if err != nil {
@@ -246,7 +324,12 @@ func (b *backend) pathRoleDelete(
 
 func (b *backend) pathRoleRead(
 	req *logical.Request, data *framework.FieldData) (*logical.Response, error) {
-	role, err := b.getRole(req.Storage, data.Get("name").(string))
+	roleName := data.Get("name").(string)
+	if roleName == "" {
+		return logical.ErrorResponse("missing role name"), nil
+	}
+
+	role, err := b.getRole(req.Storage, roleName)
 	if err != nil {
 		return nil, err
 	}
@@ -270,6 +353,15 @@ func (b *backend) pathRoleRead(
 	resp := &logical.Response{
 		Data: structs.New(role).Map(),
 	}
+
+	if resp.Data == nil {
+		return nil, fmt.Errorf("error converting role data to response")
+	}
+
+	// These values are deprecated and the entries are migrated on read
+	delete(resp.Data, "lease")
+	delete(resp.Data, "lease_max")
+	delete(resp.Data, "allowed_base_domain")
 
 	return resp, nil
 }
@@ -296,6 +388,7 @@ func (b *backend) pathRoleCreate(
 		AllowedDomains:      data.Get("allowed_domains").(string),
 		AllowBareDomains:    data.Get("allow_bare_domains").(bool),
 		AllowSubdomains:     data.Get("allow_subdomains").(bool),
+		AllowGlobDomains:    data.Get("allow_glob_domains").(bool),
 		AllowAnyName:        data.Get("allow_any_name").(bool),
 		EnforceHostnames:    data.Get("enforce_hostnames").(bool),
 		AllowIPSANs:         data.Get("allow_ip_sans").(bool),
@@ -306,6 +399,19 @@ func (b *backend) pathRoleCreate(
 		KeyType:             data.Get("key_type").(string),
 		KeyBits:             data.Get("key_bits").(int),
 		UseCSRCommonName:    data.Get("use_csr_common_name").(bool),
+		UseCSRSANs:          data.Get("use_csr_sans").(bool),
+		KeyUsage:            data.Get("key_usage").(string),
+		OU:                  data.Get("ou").(string),
+		Organization:        data.Get("organization").(string),
+		GenerateLease:       new(bool),
+		NoStore:             data.Get("no_store").(bool),
+	}
+
+	// no_store implies generate_lease := false
+	if entry.NoStore {
+		*entry.GenerateLease = false
+	} else {
+		*entry.GenerateLease = data.Get("generate_lease").(bool)
 	}
 
 	if entry.KeyType == "rsa" && entry.KeyBits < 2048 {
@@ -317,10 +423,10 @@ func (b *backend) pathRoleCreate(
 	if len(entry.MaxTTL) == 0 {
 		maxTTL = maxSystemTTL
 	} else {
-		maxTTL, err = time.ParseDuration(entry.MaxTTL)
+		maxTTL, err = parseutil.ParseDurationSecond(entry.MaxTTL)
 		if err != nil {
 			return logical.ErrorResponse(fmt.Sprintf(
-				"Invalid ttl: %s", err)), nil
+				"Invalid max ttl: %s", err)), nil
 		}
 	}
 	if maxTTL > maxSystemTTL {
@@ -329,7 +435,7 @@ func (b *backend) pathRoleCreate(
 
 	ttl := b.System().DefaultLeaseTTL()
 	if len(entry.TTL) != 0 {
-		ttl, err = time.ParseDuration(entry.TTL)
+		ttl, err = parseutil.ParseDurationSecond(entry.TTL)
 		if err != nil {
 			return logical.ErrorResponse(fmt.Sprintf(
 				"Invalid ttl: %s", err)), nil
@@ -347,6 +453,10 @@ func (b *backend) pathRoleCreate(
 		}
 	}
 
+	// Persist clamped TTLs
+	entry.TTL = ttl.String()
+	entry.MaxTTL = maxTTL.String()
+
 	if errResp := validateKeyTypeLength(entry.KeyType, entry.KeyBits); errResp != nil {
 		return errResp, nil
 	}
@@ -363,6 +473,35 @@ func (b *backend) pathRoleCreate(
 	return nil, nil
 }
 
+func parseKeyUsages(input string) int {
+	var parsedKeyUsages x509.KeyUsage
+	splitKeyUsage := strings.Split(input, ",")
+	for _, k := range splitKeyUsage {
+		switch strings.ToLower(strings.TrimSpace(k)) {
+		case "digitalsignature":
+			parsedKeyUsages |= x509.KeyUsageDigitalSignature
+		case "contentcommitment":
+			parsedKeyUsages |= x509.KeyUsageContentCommitment
+		case "keyencipherment":
+			parsedKeyUsages |= x509.KeyUsageKeyEncipherment
+		case "dataencipherment":
+			parsedKeyUsages |= x509.KeyUsageDataEncipherment
+		case "keyagreement":
+			parsedKeyUsages |= x509.KeyUsageKeyAgreement
+		case "certsign":
+			parsedKeyUsages |= x509.KeyUsageCertSign
+		case "crlsign":
+			parsedKeyUsages |= x509.KeyUsageCRLSign
+		case "encipheronly":
+			parsedKeyUsages |= x509.KeyUsageEncipherOnly
+		case "decipheronly":
+			parsedKeyUsages |= x509.KeyUsageDecipherOnly
+		}
+	}
+
+	return int(parsedKeyUsages)
+}
+
 type roleEntry struct {
 	LeaseMax              string `json:"lease_max" structs:"lease_max" mapstructure:"lease_max"`
 	Lease                 string `json:"lease" structs:"lease" mapstructure:"lease"`
@@ -375,6 +514,7 @@ type roleEntry struct {
 	AllowBareDomains      bool   `json:"allow_bare_domains" structs:"allow_bare_domains" mapstructure:"allow_bare_domains"`
 	AllowTokenDisplayName bool   `json:"allow_token_displayname" structs:"allow_token_displayname" mapstructure:"allow_token_displayname"`
 	AllowSubdomains       bool   `json:"allow_subdomains" structs:"allow_subdomains" mapstructure:"allow_subdomains"`
+	AllowGlobDomains      bool   `json:"allow_glob_domains" structs:"allow_glob_domains" mapstructure:"allow_glob_domains"`
 	AllowAnyName          bool   `json:"allow_any_name" structs:"allow_any_name" mapstructure:"allow_any_name"`
 	EnforceHostnames      bool   `json:"enforce_hostnames" structs:"enforce_hostnames" mapstructure:"enforce_hostnames"`
 	AllowIPSANs           bool   `json:"allow_ip_sans" structs:"allow_ip_sans" mapstructure:"allow_ip_sans"`
@@ -383,15 +523,21 @@ type roleEntry struct {
 	CodeSigningFlag       bool   `json:"code_signing_flag" structs:"code_signing_flag" mapstructure:"code_signing_flag"`
 	EmailProtectionFlag   bool   `json:"email_protection_flag" structs:"email_protection_flag" mapstructure:"email_protection_flag"`
 	UseCSRCommonName      bool   `json:"use_csr_common_name" structs:"use_csr_common_name" mapstructure:"use_csr_common_name"`
+	UseCSRSANs            bool   `json:"use_csr_sans" structs:"use_csr_sans" mapstructure:"use_csr_sans"`
 	KeyType               string `json:"key_type" structs:"key_type" mapstructure:"key_type"`
 	KeyBits               int    `json:"key_bits" structs:"key_bits" mapstructure:"key_bits"`
-	MaxPathLength         *int   `json:",omitempty" structs:",omitempty"`
+	MaxPathLength         *int   `json:",omitempty" structs:"max_path_length,omitempty" mapstructure:"max_path_length"`
+	KeyUsage              string `json:"key_usage" structs:"key_usage" mapstructure:"key_usage"`
+	OU                    string `json:"ou" structs:"ou" mapstructure:"ou"`
+	Organization          string `json:"organization" structs:"organization" mapstructure:"organization"`
+	GenerateLease         *bool  `json:"generate_lease,omitempty" structs:"generate_lease,omitempty"`
+	NoStore               bool   `json:"no_store" structs:"no_store" mapstructure:"no_store"`
 }
 
-const pathRoleHelpSyn = `
-Manage the roles that can be created with this backend.
-`
+const pathListRolesHelpSyn = `List the existing roles in this backend`
 
-const pathRoleHelpDesc = `
-This path lets you manage the roles that can be created with this backend.
-`
+const pathListRolesHelpDesc = `Roles will be listed by the role name.`
+
+const pathRoleHelpSyn = `Manage the roles that can be created with this backend.`
+
+const pathRoleHelpDesc = `This path lets you manage the roles that can be created with this backend.`

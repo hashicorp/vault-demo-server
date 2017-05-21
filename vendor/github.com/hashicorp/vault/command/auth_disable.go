@@ -3,15 +3,17 @@ package command
 import (
 	"fmt"
 	"strings"
+
+	"github.com/hashicorp/vault/meta"
 )
 
 // AuthDisableCommand is a Command that enables a new endpoint.
 type AuthDisableCommand struct {
-	Meta
+	meta.Meta
 }
 
 func (c *AuthDisableCommand) Run(args []string) int {
-	flags := c.Meta.FlagSet("auth-disable", FlagSetDefault)
+	flags := c.Meta.FlagSet("auth-disable", meta.FlagSetDefault)
 	flags.Usage = func() { c.Ui.Error(c.Help()) }
 	if err := flags.Parse(args); err != nil {
 		return 1
@@ -41,7 +43,7 @@ func (c *AuthDisableCommand) Run(args []string) int {
 	}
 
 	c.Ui.Output(fmt.Sprintf(
-		"Disabled auth provider at path '%s'!", path))
+		"Disabled auth provider at path '%s' if it was enabled", path))
 
 	return 0
 }
@@ -56,13 +58,12 @@ Usage: vault auth-disable [options] path
 
   Disable an already-enabled auth provider.
 
-  Once the auth provider is disabled, that path cannot be used anymore
+  Once the auth provider is disabled its path can no longer be used
   to authenticate. All access tokens generated via the disabled auth provider
   will be revoked. This command will block until all tokens are revoked.
-  If the command is exited early, the tokens will still be revoked.
+  If the command is exited early the tokens will still be revoked.
 
 General Options:
-
-  ` + generalOptionsUsage()
+` + meta.GeneralOptionsUsage()
 	return strings.TrimSpace(helpText)
 }

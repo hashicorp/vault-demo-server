@@ -47,13 +47,17 @@ func (b *backend) pathTokenRead(
 	}
 
 	// Get the consul client
-	c, err := client(req.Storage)
-	if err != nil {
-		return logical.ErrorResponse(err.Error()), nil
+	c, userErr, intErr := client(req.Storage)
+	if intErr != nil {
+		return nil, intErr
+	}
+	if userErr != nil {
+		return logical.ErrorResponse(userErr.Error()), nil
 	}
 
-	// Generate a random name for the token
-	tokenName := fmt.Sprintf("Vault %s %d", req.DisplayName, time.Now().Unix())
+	// Generate a name for the token
+	tokenName := fmt.Sprintf("Vault %s %s %d", name, req.DisplayName, time.Now().UnixNano())
+
 	// Create it
 	token, _, err := c.ACL().Create(&api.ACLEntry{
 		Name:  tokenName,
@@ -67,7 +71,9 @@ func (b *backend) pathTokenRead(
 	// Use the helper to create the secret
 	s := b.Secret(SecretTokenType).Response(map[string]interface{}{
 		"token": token,
-	}, nil)
+	}, map[string]interface{}{
+		"token": token,
+	})
 	s.Secret.TTL = result.Lease
 
 	return s, nil

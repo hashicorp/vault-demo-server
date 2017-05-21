@@ -1,4 +1,4 @@
-package file
+package syslog
 
 import (
 	"bytes"
@@ -7,9 +7,7 @@ import (
 
 	"github.com/hashicorp/go-syslog"
 	"github.com/hashicorp/vault/audit"
-	"github.com/hashicorp/vault/helper/salt"
 	"github.com/hashicorp/vault/logical"
-	"github.com/mitchellh/copystructure"
 )
 
 func Factory(conf *audit.BackendConfig) (audit.Backend, error) {
@@ -27,6 +25,26 @@ func Factory(conf *audit.BackendConfig) (audit.Backend, error) {
 	tag, ok := conf.Config["tag"]
 	if !ok {
 		tag = "vault"
+	}
+
+	format, ok := conf.Config["format"]
+	if !ok {
+		format = "json"
+	}
+	switch format {
+	case "json", "jsonx":
+	default:
+		return nil, fmt.Errorf("unknown format type %s", format)
+	}
+
+	// Check if hashing of accessor is disabled
+	hmacAccessor := true
+	if hmacAccessorRaw, ok := conf.Config["hmac_accessor"]; ok {
+		value, err := strconv.ParseBool(hmacAccessorRaw)
+		if err != nil {
+			return nil, err
+		}
+		hmacAccessor = value
 	}
 
 	// Check if raw logging is enabled
@@ -47,62 +65,42 @@ func Factory(conf *audit.BackendConfig) (audit.Backend, error) {
 
 	b := &Backend{
 		logger: logger,
-		logRaw: logRaw,
-		salt:   conf.Salt,
+		formatConfig: audit.FormatterConfig{
+			Raw:          logRaw,
+			Salt:         conf.Salt,
+			HMACAccessor: hmacAccessor,
+		},
 	}
+
+	switch format {
+	case "json":
+		b.formatter.AuditFormatWriter = &audit.JSONFormatWriter{
+			Prefix: conf.Config["prefix"],
+		}
+	case "jsonx":
+		b.formatter.AuditFormatWriter = &audit.JSONxFormatWriter{
+			Prefix: conf.Config["prefix"],
+		}
+	}
+
 	return b, nil
 }
 
 // Backend is the audit backend for the syslog-based audit store.
 type Backend struct {
 	logger gsyslog.Syslogger
-	logRaw bool
-	salt   *salt.Salt
+
+	formatter    audit.AuditFormatter
+	formatConfig audit.FormatterConfig
 }
 
 func (b *Backend) GetHash(data string) string {
-	return audit.HashString(b.salt, data)
+	return audit.HashString(b.formatConfig.Salt, data)
 }
 
 func (b *Backend) LogRequest(auth *logical.Auth, req *logical.Request, outerErr error) error {
-	if !b.logRaw {
-		// Before we copy the structure we must nil out some data
-		// otherwise we will cause reflection to panic and die
-		if req.Connection != nil && req.Connection.ConnState != nil {
-			origReq := req
-			origState := req.Connection.ConnState
-			req.Connection.ConnState = nil
-			defer func() {
-				origReq.Connection.ConnState = origState
-			}()
-		}
-
-		// Copy the structures
-		cp, err := copystructure.Copy(auth)
-		if err != nil {
-			return err
-		}
-		auth = cp.(*logical.Auth)
-
-		cp, err = copystructure.Copy(req)
-		if err != nil {
-			return err
-		}
-		req = cp.(*logical.Request)
-
-		// Hash any sensitive information
-		if err := audit.Hash(b.salt, auth); err != nil {
-			return err
-		}
-		if err := audit.Hash(b.salt, req); err != nil {
-			return err
-		}
-	}
-
-	// Encode the entry as JSON
 	var buf bytes.Buffer
-	var format audit.FormatJSON
-	if err := format.FormatRequest(&buf, auth, req, outerErr); err != nil {
+	if err := b.formatter.FormatRequest(&buf, b.formatConfig, auth, req, outerErr); err != nil {
 		return err
 	}
 
@@ -111,59 +109,17 @@ func (b *Backend) LogRequest(auth *logical.Auth, req *logical.Request, outerErr 
 	return err
 }
 
-func (b *Backend) LogResponse(auth *logical.Auth, req *logical.Request,
-	resp *logical.Response, err error) error {
-	if !b.logRaw {
-		// Before we copy the structure we must nil out some data
-		// otherwise we will cause reflection to panic and die
-		if req.Connection != nil && req.Connection.ConnState != nil {
-			origReq := req
-			origState := req.Connection.ConnState
-			req.Connection.ConnState = nil
-			defer func() {
-				origReq.Connection.ConnState = origState
-			}()
-		}
-
-		// Copy the structure
-		cp, err := copystructure.Copy(auth)
-		if err != nil {
-			return err
-		}
-		auth = cp.(*logical.Auth)
-
-		cp, err = copystructure.Copy(req)
-		if err != nil {
-			return err
-		}
-		req = cp.(*logical.Request)
-
-		cp, err = copystructure.Copy(resp)
-		if err != nil {
-			return err
-		}
-		resp = cp.(*logical.Response)
-
-		// Hash any sensitive information
-		if err := audit.Hash(b.salt, auth); err != nil {
-			return err
-		}
-		if err := audit.Hash(b.salt, req); err != nil {
-			return err
-		}
-		if err := audit.Hash(b.salt, resp); err != nil {
-			return err
-		}
-	}
-
-	// Encode the entry as JSON
+func (b *Backend) LogResponse(auth *logical.Auth, req *logical.Request, resp *logical.Response, err error) error {
 	var buf bytes.Buffer
-	var format audit.FormatJSON
-	if err := format.FormatResponse(&buf, auth, req, resp, err); err != nil {
+	if err := b.formatter.FormatResponse(&buf, b.formatConfig, auth, req, resp, err); err != nil {
 		return err
 	}
 
-	// Write otu to syslog
+	// Write out to syslog
 	_, err = b.logger.Write(buf.Bytes())
 	return err
+}
+
+func (b *Backend) Reload() error {
+	return nil
 }

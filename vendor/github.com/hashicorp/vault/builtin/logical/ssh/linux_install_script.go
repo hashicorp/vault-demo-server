@@ -7,10 +7,10 @@ const (
 #!/bin/bash
 #
 # This is a default script which installs or uninstalls an RSA public key to/from
-# authoried_keys file in a typical linux machine. 
-# 
+# authorized_keys file in a typical linux machine.
+#
 # If the platform differs or if the binaries used in this script are not available
-# in targer machine, use the 'install_script' parameter with 'roles/' endpoint to
+# in target machine, use the 'install_script' parameter with 'roles/' endpoint to
 # register a custom script (applicable for Dynamic type only).
 #
 # Vault server runs this script on the target machine with the following params:
@@ -51,12 +51,14 @@ fi
 
 # Create the .ssh directory and authorized_keys file if it does not exist
 SSH_DIR=$(dirname $AUTH_KEYS_FILE)
-sudo mkdir -p "$SSH_DIR"                                                            
+sudo mkdir -p "$SSH_DIR"
 sudo touch "$AUTH_KEYS_FILE"
 
 # Remove the key from authorized_keys file if it is already present.
-# This step is common for both install and uninstall.
-grep -vFf "$PUBLIC_KEY_FILE" "$AUTH_KEYS_FILE" > temp_$PUBLIC_KEY_FILE || true
+# This step is common for both install and uninstall.  Note that grep's
+# return code is ignored, thus if grep fails all keys will be removed
+# rather than none and it fails secure
+sudo grep -vFf "$PUBLIC_KEY_FILE" "$AUTH_KEYS_FILE" > temp_$PUBLIC_KEY_FILE || true
 cat temp_$PUBLIC_KEY_FILE | sudo tee "$AUTH_KEYS_FILE"
 
 # Append the new public key to authorized_keys file

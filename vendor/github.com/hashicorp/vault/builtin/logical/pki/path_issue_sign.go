@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/hashicorp/vault/helper/certutil"
+	"github.com/hashicorp/vault/helper/errutil"
 	"github.com/hashicorp/vault/logical"
 	"github.com/hashicorp/vault/logical/framework"
 )
@@ -23,7 +24,6 @@ func pathIssue(b *backend) *framework.Path {
 	}
 
 	ret.Fields = addNonCACommonFields(map[string]*framework.FieldSchema{})
-
 	return ret
 }
 
@@ -52,7 +52,7 @@ func pathSign(b *backend) *framework.Path {
 
 func pathSignVerbatim(b *backend) *framework.Path {
 	ret := &framework.Path{
-		Pattern: "sign-verbatim/" + framework.GenericNameRegex("role"),
+		Pattern: "sign-verbatim" + framework.OptionalParamRegex("role"),
 
 		Callbacks: map[logical.Operation]framework.OperationFunc{
 			logical.UpdateOperation: b.pathSignVerbatim,
@@ -116,17 +116,46 @@ func (b *backend) pathSign(
 func (b *backend) pathSignVerbatim(
 	req *logical.Request, data *framework.FieldData) (*logical.Response, error) {
 
+	roleName := data.Get("role").(string)
+
+	// Get the role if one was specified
+	role, err := b.getRole(req.Storage, roleName)
+	if err != nil {
+		return nil, err
+	}
+
 	ttl := b.System().DefaultLeaseTTL()
-	role := &roleEntry{
+	maxTTL := b.System().MaxLeaseTTL()
+
+	entry := &roleEntry{
 		TTL:              ttl.String(),
+		MaxTTL:           maxTTL.String(),
 		AllowLocalhost:   true,
 		AllowAnyName:     true,
 		AllowIPSANs:      true,
 		EnforceHostnames: false,
 		KeyType:          "any",
+		UseCSRCommonName: true,
+		UseCSRSANs:       true,
+		GenerateLease:    new(bool),
 	}
 
-	return b.pathIssueSignCert(req, data, role, true, true)
+	if role != nil {
+		if role.TTL != "" {
+			entry.TTL = role.TTL
+		}
+		if role.MaxTTL != "" {
+			entry.MaxTTL = role.MaxTTL
+		}
+		entry.NoStore = role.NoStore
+	}
+
+	*entry.GenerateLease = false
+	if role != nil && role.GenerateLease != nil {
+		*entry.GenerateLease = *role.GenerateLease
+	}
+
+	return b.pathIssueSignCert(req, data, entry, true, true)
 }
 
 func (b *backend) pathIssueSignCert(
@@ -140,11 +169,11 @@ func (b *backend) pathIssueSignCert(
 	var caErr error
 	signingBundle, caErr := fetchCAInfo(req)
 	switch caErr.(type) {
-	case certutil.UserError:
-		return nil, certutil.UserError{Err: fmt.Sprintf(
+	case errutil.UserError:
+		return nil, errutil.UserError{Err: fmt.Sprintf(
 			"Could not fetch the CA certificate (was one set?): %s", caErr)}
-	case certutil.InternalError:
-		return nil, certutil.InternalError{Err: fmt.Sprintf(
+	case errutil.InternalError:
+		return nil, errutil.InternalError{Err: fmt.Sprintf(
 			"Error fetching CA certificate: %s", caErr)}
 	}
 
@@ -157,11 +186,16 @@ func (b *backend) pathIssueSignCert(
 	}
 	if err != nil {
 		switch err.(type) {
-		case certutil.UserError:
+		case errutil.UserError:
 			return logical.ErrorResponse(err.Error()), nil
-		case certutil.InternalError:
+		case errutil.InternalError:
 			return nil, err
 		}
+	}
+
+	signingCB, err := signingBundle.ToCertBundle()
+	if err != nil {
+		return nil, fmt.Errorf("Error converting raw signing bundle to cert bundle: %s", err)
 	}
 
 	cb, err := parsedBundle.ToCertBundle()
@@ -169,50 +203,78 @@ func (b *backend) pathIssueSignCert(
 		return nil, fmt.Errorf("Error converting raw cert bundle to cert bundle: %s", err)
 	}
 
-	resp := b.Secret(SecretCertsType).Response(
-		map[string]interface{}{
-			"certificate": cb.Certificate,
-			"issuing_ca":  cb.IssuingCA,
-		},
-		map[string]interface{}{
-			"serial_number": cb.SerialNumber,
-		})
+	respData := map[string]interface{}{
+		"serial_number": cb.SerialNumber,
+	}
 
 	switch format {
 	case "pem":
-		resp.Data["issuing_ca"] = cb.IssuingCA
-		resp.Data["certificate"] = cb.Certificate
-
+		respData["issuing_ca"] = signingCB.Certificate
+		respData["certificate"] = cb.Certificate
+		if cb.CAChain != nil && len(cb.CAChain) > 0 {
+			respData["ca_chain"] = cb.CAChain
+		}
 		if !useCSR {
-			resp.Data["private_key"] = cb.PrivateKey
-			resp.Data["private_key_type"] = cb.PrivateKeyType
+			respData["private_key"] = cb.PrivateKey
+			respData["private_key_type"] = cb.PrivateKeyType
 		}
 
 	case "pem_bundle":
-		resp.Data["issuing_ca"] = cb.IssuingCA
-		resp.Data["certificate"] = fmt.Sprintf("%s\n%s", cb.Certificate, cb.IssuingCA)
+		respData["issuing_ca"] = signingCB.Certificate
+		respData["certificate"] = cb.ToPEMBundle()
+		if cb.CAChain != nil && len(cb.CAChain) > 0 {
+			respData["ca_chain"] = cb.CAChain
+		}
 		if !useCSR {
-			resp.Data["private_key"] = cb.PrivateKey
-			resp.Data["private_key_type"] = cb.PrivateKeyType
-			resp.Data["certificate"] = fmt.Sprintf("%s\n%s\n%s", cb.PrivateKey, cb.Certificate, cb.IssuingCA)
+			respData["private_key"] = cb.PrivateKey
+			respData["private_key_type"] = cb.PrivateKeyType
 		}
 
 	case "der":
-		resp.Data["certificate"] = base64.StdEncoding.EncodeToString(parsedBundle.CertificateBytes)
-		resp.Data["issuing_ca"] = base64.StdEncoding.EncodeToString(parsedBundle.IssuingCABytes)
+		respData["certificate"] = base64.StdEncoding.EncodeToString(parsedBundle.CertificateBytes)
+		respData["issuing_ca"] = base64.StdEncoding.EncodeToString(signingBundle.CertificateBytes)
+
+		var caChain []string
+		for _, caCert := range parsedBundle.CAChain {
+			caChain = append(caChain, base64.StdEncoding.EncodeToString(caCert.Bytes))
+		}
+		if caChain != nil && len(caChain) > 0 {
+			respData["ca_chain"] = caChain
+		}
+
 		if !useCSR {
-			resp.Data["private_key"] = base64.StdEncoding.EncodeToString(parsedBundle.PrivateKeyBytes)
+			respData["private_key"] = base64.StdEncoding.EncodeToString(parsedBundle.PrivateKeyBytes)
+			respData["private_key_type"] = cb.PrivateKeyType
 		}
 	}
 
-	resp.Secret.TTL = parsedBundle.Certificate.NotAfter.Sub(time.Now())
+	var resp *logical.Response
+	switch {
+	case role.GenerateLease == nil:
+		return nil, fmt.Errorf("generate lease in role is nil")
+	case *role.GenerateLease == false:
+		// If lease generation is disabled do not populate `Secret` field in
+		// the response
+		resp = &logical.Response{
+			Data: respData,
+		}
+	default:
+		resp = b.Secret(SecretCertsType).Response(
+			respData,
+			map[string]interface{}{
+				"serial_number": cb.SerialNumber,
+			})
+		resp.Secret.TTL = parsedBundle.Certificate.NotAfter.Sub(time.Now())
+	}
 
-	err = req.Storage.Put(&logical.StorageEntry{
-		Key:   "certs/" + cb.SerialNumber,
-		Value: parsedBundle.CertificateBytes,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("Unable to store certificate locally")
+	if !role.NoStore {
+		err = req.Storage.Put(&logical.StorageEntry{
+			Key:   "certs/" + normalizeSerial(cb.SerialNumber),
+			Value: parsedBundle.CertificateBytes,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("unable to store certificate locally: %v", err)
+		}
 	}
 
 	return resp, nil

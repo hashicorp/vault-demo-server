@@ -6,17 +6,40 @@ import (
 	"encoding/hex"
 	"fmt"
 	"net"
-	"reflect"
-	"sort"
 	"strings"
 
+	"github.com/hashicorp/vault/helper/policyutil"
 	"github.com/hashicorp/vault/logical"
 	"github.com/hashicorp/vault/logical/framework"
 )
 
+func pathLoginWithAppIDPath(b *backend) *framework.Path {
+	return &framework.Path{
+		Pattern: "login/(?P<app_id>.+)",
+		Fields: map[string]*framework.FieldSchema{
+			"app_id": &framework.FieldSchema{
+				Type:        framework.TypeString,
+				Description: "The unique app ID",
+			},
+
+			"user_id": &framework.FieldSchema{
+				Type:        framework.TypeString,
+				Description: "The unique user ID",
+			},
+		},
+
+		Callbacks: map[logical.Operation]framework.OperationFunc{
+			logical.UpdateOperation: b.pathLogin,
+		},
+
+		HelpSynopsis:    pathLoginSyn,
+		HelpDescription: pathLoginDesc,
+	}
+}
+
 func pathLogin(b *backend) *framework.Path {
 	return &framework.Path{
-		Pattern: "login",
+		Pattern: "login$",
 		Fields: map[string]*framework.FieldSchema{
 			"app_id": &framework.FieldSchema{
 				Type:        framework.TypeString,
@@ -96,13 +119,12 @@ func (b *backend) pathLoginRenew(
 	}
 
 	// Get the policies associated with the app
-	policies, err := b.MapAppId.Policies(req.Storage, appId)
+	mapPolicies, err := b.MapAppId.Policies(req.Storage, appId)
 	if err != nil {
 		return nil, err
 	}
-	sort.Strings(req.Auth.Policies)
-	if !reflect.DeepEqual(policies, req.Auth.Policies) {
-		return logical.ErrorResponse("policies do not match"), nil
+	if !policyutil.EquivalentPolicies(mapPolicies, req.Auth.Policies) {
+		return nil, fmt.Errorf("policies do not match")
 	}
 
 	return framework.LeaseExtend(0, 0, b.System())(req, d)

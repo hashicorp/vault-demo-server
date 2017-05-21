@@ -6,11 +6,12 @@ import (
 	"strings"
 
 	"github.com/hashicorp/vault/api"
+	"github.com/hashicorp/vault/meta"
 )
 
 // ListCommand is a Command that lists data from the Vault.
 type ListCommand struct {
-	Meta
+	meta.Meta
 }
 
 func (c *ListCommand) Run(args []string) int {
@@ -18,7 +19,7 @@ func (c *ListCommand) Run(args []string) int {
 	var err error
 	var secret *api.Secret
 	var flags *flag.FlagSet
-	flags = c.Meta.FlagSet("list", FlagSetDefault)
+	flags = c.Meta.FlagSet("list", meta.FlagSetDefault)
 	flags.StringVar(&format, "format", "table", "")
 	flags.Usage = func() { c.Ui.Error(c.Help()) }
 	if err := flags.Parse(args); err != nil {
@@ -27,7 +28,7 @@ func (c *ListCommand) Run(args []string) int {
 
 	args = flags.Args()
 	if len(args) != 1 || len(args[0]) == 0 {
-		c.Ui.Error("read expects one argument")
+		c.Ui.Error("list expects one argument")
 		flags.Usage()
 		return 1
 	}
@@ -59,6 +60,10 @@ func (c *ListCommand) Run(args []string) int {
 			"No value found at %s", path))
 		return 1
 	}
+	if secret.WrapInfo != nil && secret.WrapInfo.TTL != 0 {
+		return OutputSecret(c.Ui, format, secret)
+	}
+
 	if secret.Data["keys"] == nil {
 		c.Ui.Error("No entries found")
 		return 0
@@ -82,9 +87,7 @@ Usage: vault list [options] path
   and endpoint-specific.
 
 General Options:
-
-  ` + generalOptionsUsage() + `
-
+` + meta.GeneralOptionsUsage() + `
 Read Options:
 
   -format=table           The format for output. By default it is a whitespace-

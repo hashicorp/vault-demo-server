@@ -1,9 +1,11 @@
 package logical
 
 import (
+	"errors"
 	"fmt"
 	"reflect"
 
+	"github.com/hashicorp/vault/helper/wrapping"
 	"github.com/mitchellh/copystructure"
 )
 
@@ -30,30 +32,33 @@ const (
 // It is used to abstract the details of the higher level request protocol.
 type Response struct {
 	// Secret, if not nil, denotes that this response represents a secret.
-	Secret *Secret
+	Secret *Secret `json:"secret" structs:"secret" mapstructure:"secret"`
 
 	// Auth, if not nil, contains the authentication information for
 	// this response. This is only checked and means something for
 	// credential backends.
-	Auth *Auth
+	Auth *Auth `json:"auth" structs:"auth" mapstructure:"auth"`
 
 	// Response data is an opaque map that must have string keys. For
 	// secrets, this data is sent down to the user as-is. To store internal
 	// data that you don't want the user to see, store it in
 	// Secret.InternalData.
-	Data map[string]interface{}
+	Data map[string]interface{} `json:"data" structs:"data" mapstructure:"data"`
 
 	// Redirect is an HTTP URL to redirect to for further authentication.
 	// This is only valid for credential backends. This will be blanked
 	// for any logical backend and ignored.
-	Redirect string
+	Redirect string `json:"redirect" structs:"redirect" mapstructure:"redirect"`
 
 	// Warnings allow operations or backends to return warnings in response
 	// to user actions without failing the action outright.
 	// Making it private helps ensure that it is easy for various parts of
 	// Vault (backend, core, etc.) to add warnings without accidentally
 	// replacing what exists.
-	warnings []string
+	warnings []string `json:"warnings" structs:"warnings" mapstructure:"warnings"`
+
+	// Information for wrapping the response in a cubbyhole
+	WrapInfo *wrapping.ResponseWrapInfo `json:"wrap_info" structs:"wrap_info" mapstructure:"wrap_info"`
 }
 
 func init() {
@@ -74,7 +79,7 @@ func init() {
 		if input.Auth != nil {
 			retAuth, err := copystructure.Copy(input.Auth)
 			if err != nil {
-				return nil, fmt.Errorf("error copying Secret: %v", err)
+				return nil, fmt.Errorf("error copying Auth: %v", err)
 			}
 			ret.Auth = retAuth.(*Auth)
 		}
@@ -82,15 +87,23 @@ func init() {
 		if input.Data != nil {
 			retData, err := copystructure.Copy(&input.Data)
 			if err != nil {
-				return nil, fmt.Errorf("error copying Secret: %v", err)
+				return nil, fmt.Errorf("error copying Data: %v", err)
 			}
-			ret.Data = retData.(map[string]interface{})
+			ret.Data = *(retData.(*map[string]interface{}))
 		}
 
 		if input.Warnings() != nil {
 			for _, warning := range input.Warnings() {
 				ret.AddWarning(warning)
 			}
+		}
+
+		if input.WrapInfo != nil {
+			retWrapInfo, err := copystructure.Copy(input.WrapInfo)
+			if err != nil {
+				return nil, fmt.Errorf("error copying WrapInfo: %v", err)
+			}
+			ret.WrapInfo = retWrapInfo.(*wrapping.ResponseWrapInfo)
 		}
 
 		return &ret, nil
@@ -115,9 +128,27 @@ func (r *Response) ClearWarnings() {
 	r.warnings = make([]string, 0, 1)
 }
 
+// Copies the warnings from the other response to this one
+func (r *Response) CloneWarnings(other *Response) {
+	r.warnings = other.warnings
+}
+
 // IsError returns true if this response seems to indicate an error.
 func (r *Response) IsError() bool {
-	return r != nil && len(r.Data) == 1 && r.Data["error"] != nil
+	return r != nil && r.Data != nil && len(r.Data) == 1 && r.Data["error"] != nil
+}
+
+func (r *Response) Error() error {
+	if !r.IsError() {
+		return nil
+	}
+	switch r.Data["error"].(type) {
+	case string:
+		return errors.New(r.Data["error"].(string))
+	case error:
+		return r.Data["error"].(error)
+	}
+	return nil
 }
 
 // HelpResponse is used to format a help response

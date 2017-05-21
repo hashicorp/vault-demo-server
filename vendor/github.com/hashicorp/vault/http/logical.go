@@ -6,61 +6,108 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
+	"github.com/hashicorp/errwrap"
+	"github.com/hashicorp/go-uuid"
 	"github.com/hashicorp/vault/logical"
 	"github.com/hashicorp/vault/vault"
 )
 
-func handleLogical(core *vault.Core, dataOnly bool) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Determine the path...
-		if !strings.HasPrefix(r.URL.Path, "/v1/") {
-			respondError(w, http.StatusNotFound, nil)
-			return
-		}
-		path := r.URL.Path[len("/v1/"):]
-		if path == "" {
-			respondError(w, http.StatusNotFound, nil)
-			return
-		}
+type PrepareRequestFunc func(*vault.Core, *logical.Request) error
 
-		// Determine the operation
-		var op logical.Operation
-		switch r.Method {
-		case "DELETE":
-			op = logical.DeleteOperation
-		case "GET":
-			op = logical.ReadOperation
-			// Need to call ParseForm to get query params loaded
-			queryVals := r.URL.Query()
-			listStr := queryVals.Get("list")
-			if listStr != "" {
-				list, err := strconv.ParseBool(listStr)
-				if err != nil {
-					respondError(w, http.StatusBadRequest, nil)
-				}
-				if list {
-					op = logical.ListOperation
-				}
-			}
-		case "POST", "PUT":
-			op = logical.UpdateOperation
-		case "LIST":
-			op = logical.ListOperation
-		default:
-			respondError(w, http.StatusMethodNotAllowed, nil)
-			return
-		}
+func buildLogicalRequest(core *vault.Core, w http.ResponseWriter, r *http.Request) (*logical.Request, int, error) {
+	// Determine the path...
+	if !strings.HasPrefix(r.URL.Path, "/v1/") {
+		return nil, http.StatusNotFound, nil
+	}
+	path := r.URL.Path[len("/v1/"):]
+	if path == "" {
+		return nil, http.StatusNotFound, nil
+	}
 
-		// Parse the request if we can
-		var req map[string]interface{}
-		if op == logical.UpdateOperation {
-			err := parseRequest(r, &req)
-			if err == io.EOF {
-				req = nil
-				err = nil
-			}
+	// Determine the operation
+	var op logical.Operation
+	switch r.Method {
+	case "DELETE":
+		op = logical.DeleteOperation
+	case "GET":
+		op = logical.ReadOperation
+		// Need to call ParseForm to get query params loaded
+		queryVals := r.URL.Query()
+		listStr := queryVals.Get("list")
+		if listStr != "" {
+			list, err := strconv.ParseBool(listStr)
 			if err != nil {
+				return nil, http.StatusBadRequest, nil
+			}
+			if list {
+				op = logical.ListOperation
+			}
+		}
+	case "POST", "PUT":
+		op = logical.UpdateOperation
+	case "LIST":
+		op = logical.ListOperation
+	default:
+		return nil, http.StatusMethodNotAllowed, nil
+	}
+
+	if op == logical.ListOperation {
+		if !strings.HasSuffix(path, "/") {
+			path += "/"
+		}
+	}
+
+	// Parse the request if we can
+	var data map[string]interface{}
+	if op == logical.UpdateOperation {
+		err := parseRequest(r, w, &data)
+		if err == io.EOF {
+			data = nil
+			err = nil
+		}
+		if err != nil {
+			return nil, http.StatusBadRequest, err
+		}
+	}
+
+	var err error
+	request_id, err := uuid.GenerateUUID()
+	if err != nil {
+		return nil, http.StatusBadRequest, errwrap.Wrapf("failed to generate identifier for the request: {{err}}", err)
+	}
+
+	req := requestAuth(core, r, &logical.Request{
+		ID:         request_id,
+		Operation:  op,
+		Path:       path,
+		Data:       data,
+		Connection: getConnection(r),
+		Headers:    r.Header,
+	})
+
+	req, err = requestWrapInfo(r, req)
+	if err != nil {
+		return nil, http.StatusBadRequest, errwrap.Wrapf("error parsing X-Vault-Wrap-TTL header: {{err}}", err)
+	}
+
+	return req, 0, nil
+}
+
+func handleLogical(core *vault.Core, dataOnly bool, prepareRequestCallback PrepareRequestFunc) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		req, statusCode, err := buildLogicalRequest(core, w, r)
+		if err != nil || statusCode != 0 {
+			respondError(w, statusCode, err)
+			return
+		}
+
+		// Certain endpoints may require changes to the request object. They
+		// will have a callback registered to do the needed operations, so
+		// invoke it before proceeding.
+		if prepareRequestCallback != nil {
+			if err := prepareRequestCallback(core, req); err != nil {
 				respondError(w, http.StatusBadRequest, err)
 				return
 			}
@@ -68,28 +115,23 @@ func handleLogical(core *vault.Core, dataOnly bool) http.Handler {
 
 		// Make the internal request. We attach the connection info
 		// as well in case this is an authentication request that requires
-		// it. Vault core handles stripping this if we need to.
-		resp, ok := request(core, w, r, requestAuth(r, &logical.Request{
-			Operation:  op,
-			Path:       path,
-			Data:       req,
-			Connection: getConnection(r),
-		}))
+		// it. Vault core handles stripping this if we need to. This also
+		// handles all error cases; if we hit respondLogical, the request is a
+		// success.
+		resp, ok := request(core, w, r, req)
 		if !ok {
-			return
-		}
-		if (op == logical.ReadOperation || op == logical.ListOperation) && resp == nil {
-			respondError(w, http.StatusNotFound, nil)
 			return
 		}
 
 		// Build the proper response
-		respondLogical(w, r, path, dataOnly, resp)
+		respondLogical(w, r, req, dataOnly, resp)
 	})
 }
 
-func respondLogical(w http.ResponseWriter, r *http.Request, path string, dataOnly bool, resp *logical.Response) {
-	var httpResp interface{}
+func respondLogical(w http.ResponseWriter, r *http.Request, req *logical.Request, dataOnly bool, resp *logical.Response) {
+	var httpResp *logical.HTTPResponse
+	var ret interface{}
+
 	if resp != nil {
 		if resp.Redirect != "" {
 			// If we have a redirect, redirect! We use a 307 code
@@ -98,94 +140,107 @@ func respondLogical(w http.ResponseWriter, r *http.Request, path string, dataOnl
 			return
 		}
 
-		if dataOnly {
-			respondOk(w, resp.Data)
-			return
-		}
-
 		// Check if this is a raw response
-		if _, ok := resp.Data[logical.HTTPContentType]; ok {
-			respondRaw(w, r, path, resp)
+		if _, ok := resp.Data[logical.HTTPStatusCode]; ok {
+			respondRaw(w, r, resp)
 			return
 		}
 
-		logicalResp := &LogicalResponse{
-			Data:     resp.Data,
-			Warnings: resp.Warnings(),
-		}
-		if resp.Secret != nil {
-			logicalResp.LeaseID = resp.Secret.LeaseID
-			logicalResp.Renewable = resp.Secret.Renewable
-			logicalResp.LeaseDuration = int(resp.Secret.TTL.Seconds())
-		}
-
-		// If we have authentication information, then
-		// set up the result structure.
-		if resp.Auth != nil {
-			logicalResp.Auth = &Auth{
-				ClientToken:   resp.Auth.ClientToken,
-				Policies:      resp.Auth.Policies,
-				Metadata:      resp.Auth.Metadata,
-				LeaseDuration: int(resp.Auth.TTL.Seconds()),
-				Renewable:     resp.Auth.Renewable,
+		if resp.WrapInfo != nil && resp.WrapInfo.Token != "" {
+			httpResp = &logical.HTTPResponse{
+				WrapInfo: &logical.HTTPWrapInfo{
+					Token:           resp.WrapInfo.Token,
+					TTL:             int(resp.WrapInfo.TTL.Seconds()),
+					CreationTime:    resp.WrapInfo.CreationTime.Format(time.RFC3339Nano),
+					WrappedAccessor: resp.WrapInfo.WrappedAccessor,
+				},
 			}
+		} else {
+			httpResp = logical.LogicalResponseToHTTPResponse(resp)
+			httpResp.RequestID = req.ID
 		}
 
-		httpResp = logicalResp
+		ret = httpResp
+
+		if dataOnly {
+			injector := logical.HTTPSysInjector{
+				Response: httpResp,
+			}
+			ret = injector
+		}
 	}
 
 	// Respond
-	respondOk(w, httpResp)
+	respondOk(w, ret)
+	return
 }
 
 // respondRaw is used when the response is using HTTPContentType and HTTPRawBody
 // to change the default response handling. This is only used for specific things like
 // returning the CRL information on the PKI backends.
-func respondRaw(w http.ResponseWriter, r *http.Request, path string, resp *logical.Response) {
+func respondRaw(w http.ResponseWriter, r *http.Request, resp *logical.Response) {
+	retErr := func(w http.ResponseWriter, err string) {
+		w.Header().Set("X-Vault-Raw-Error", err)
+		w.WriteHeader(http.StatusInternalServerError)
+		w.Write(nil)
+	}
+
 	// Ensure this is never a secret or auth response
 	if resp.Secret != nil || resp.Auth != nil {
-		respondError(w, http.StatusInternalServerError, nil)
+		retErr(w, "raw responses cannot contain secrets or auth")
 		return
 	}
 
 	// Get the status code
 	statusRaw, ok := resp.Data[logical.HTTPStatusCode]
 	if !ok {
-		respondError(w, http.StatusInternalServerError, nil)
+		retErr(w, "no status code given")
 		return
 	}
 	status, ok := statusRaw.(int)
 	if !ok {
-		respondError(w, http.StatusInternalServerError, nil)
+		retErr(w, "cannot decode status code")
 		return
 	}
 
-	// Get the header
+	nonEmpty := status != http.StatusNoContent
+
+	var contentType string
+	var body []byte
+
+	// Get the content type header; don't require it if the body is empty
 	contentTypeRaw, ok := resp.Data[logical.HTTPContentType]
-	if !ok {
-		respondError(w, http.StatusInternalServerError, nil)
+	if !ok && !nonEmpty {
+		retErr(w, "no content type given")
 		return
 	}
-	contentType, ok := contentTypeRaw.(string)
-	if !ok {
-		respondError(w, http.StatusInternalServerError, nil)
-		return
+	if ok {
+		contentType, ok = contentTypeRaw.(string)
+		if !ok {
+			retErr(w, "cannot decode content type")
+			return
+		}
 	}
 
-	// Get the body
-	bodyRaw, ok := resp.Data[logical.HTTPRawBody]
-	if !ok {
-		respondError(w, http.StatusInternalServerError, nil)
-		return
-	}
-	body, ok := bodyRaw.([]byte)
-	if !ok {
-		respondError(w, http.StatusInternalServerError, nil)
-		return
+	if nonEmpty {
+		// Get the body
+		bodyRaw, ok := resp.Data[logical.HTTPRawBody]
+		if !ok {
+			retErr(w, "no body given")
+			return
+		}
+		body, ok = bodyRaw.([]byte)
+		if !ok {
+			retErr(w, "cannot decode body")
+			return
+		}
 	}
 
 	// Write the response
-	w.Header().Set("Content-Type", contentType)
+	if contentType != "" {
+		w.Header().Set("Content-Type", contentType)
+	}
+
 	w.WriteHeader(status)
 	w.Write(body)
 }
@@ -205,21 +260,4 @@ func getConnection(r *http.Request) (connection *logical.Connection) {
 		ConnState:  r.TLS,
 	}
 	return
-}
-
-type LogicalResponse struct {
-	LeaseID       string                 `json:"lease_id"`
-	Renewable     bool                   `json:"renewable"`
-	LeaseDuration int                    `json:"lease_duration"`
-	Data          map[string]interface{} `json:"data"`
-	Warnings      []string               `json:"warnings"`
-	Auth          *Auth                  `json:"auth"`
-}
-
-type Auth struct {
-	ClientToken   string            `json:"client_token"`
-	Policies      []string          `json:"policies"`
-	Metadata      map[string]string `json:"metadata"`
-	LeaseDuration int               `json:"lease_duration"`
-	Renewable     bool              `json:"renewable"`
 }

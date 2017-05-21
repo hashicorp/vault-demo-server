@@ -10,17 +10,13 @@ func Factory(conf *logical.BackendConfig) (logical.Backend, error) {
 	return Backend().Setup(conf)
 }
 
-func Backend() *framework.Backend {
+func Backend() *backend {
 	var b backend
 	b.Backend = &framework.Backend{
 		Help: backendHelp,
 
 		PathsSpecial: &logical.Paths{
-			Root: append([]string{
-				"users/*",
-			},
-				mfa.MFARootPaths()...,
-			),
+			Root: mfa.MFARootPaths(),
 
 			Unauthenticated: []string{
 				"login/*",
@@ -29,6 +25,9 @@ func Backend() *framework.Backend {
 
 		Paths: append([]*framework.Path{
 			pathUsers(&b),
+			pathUsersList(&b),
+			pathUserPolicies(&b),
+			pathUserPassword(&b),
 		},
 			mfa.MFAPaths(b.Backend, pathLogin(&b))...,
 		),
@@ -36,7 +35,7 @@ func Backend() *framework.Backend {
 		AuthRenew: b.pathLoginRenew,
 	}
 
-	return b.Backend
+	return &b
 }
 
 type backend struct {

@@ -3,15 +3,17 @@ package command
 import (
 	"fmt"
 	"strings"
+
+	"github.com/hashicorp/vault/meta"
 )
 
 // SealCommand is a Command that seals the vault.
 type SealCommand struct {
-	Meta
+	meta.Meta
 }
 
 func (c *SealCommand) Run(args []string) int {
-	flags := c.Meta.FlagSet("seal", FlagSetDefault)
+	flags := c.Meta.FlagSet("seal", meta.FlagSetDefault)
 	flags.Usage = func() { c.Ui.Error(c.Help()) }
 	if err := flags.Parse(args); err != nil {
 		return 1
@@ -34,7 +36,7 @@ func (c *SealCommand) Run(args []string) int {
 }
 
 func (c *SealCommand) Synopsis() string {
-	return "Seals the vault server"
+	return "Seals the Vault server"
 }
 
 func (c *SealCommand) Help() string {
@@ -45,8 +47,8 @@ Usage: vault seal [options]
 
   Sealing a vault tells the Vault server to stop responding to any
   access operations until it is unsealed again. A sealed vault throws away
-  its master key to unlock the data, so it physically is blocked from
-  responding to operations again until the Vault is unsealed again with
+  its master key to unlock the data, so it is physically blocked from
+  responding to operations again until the vault is unsealed with
   the "unseal" command or via the API.
 
   This command is idempotent, if the vault is already sealed it does nothing.
@@ -56,7 +58,6 @@ Usage: vault seal [options]
   This is the same as running "vault unseal -reset".
 
 General Options:
-
-  ` + generalOptionsUsage()
+` + meta.GeneralOptionsUsage()
 	return strings.TrimSpace(helpText)
 }

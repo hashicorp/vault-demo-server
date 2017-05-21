@@ -12,14 +12,14 @@ func Factory(conf *logical.BackendConfig) (logical.Backend, error) {
 	return Backend().Setup(conf)
 }
 
-func Backend() *framework.Backend {
+func Backend() *backend {
 	var b backend
 	b.Backend = &framework.Backend{
 		Help: strings.TrimSpace(backendHelp),
 
 		PathsSpecial: &logical.Paths{
-			Root: []string{
-				"config/*",
+			LocalStorage: []string{
+				framework.WALPrefix,
 			},
 		},
 
@@ -27,6 +27,7 @@ func Backend() *framework.Backend {
 			pathConfigRoot(),
 			pathConfigLease(&b),
 			pathRoles(),
+			pathListRoles(&b),
 			pathUser(&b),
 			pathSTS(&b),
 		},
@@ -35,11 +36,11 @@ func Backend() *framework.Backend {
 			secretAccessKeys(&b),
 		},
 
-		Rollback:       rollback,
-		RollbackMinAge: 5 * time.Minute,
+		WALRollback:       walRollback,
+		WALRollbackMinAge: 5 * time.Minute,
 	}
 
-	return b.Backend
+	return &b
 }
 
 type backend struct {

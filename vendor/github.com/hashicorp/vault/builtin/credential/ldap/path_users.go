@@ -3,9 +3,24 @@ package ldap
 import (
 	"strings"
 
+	"github.com/hashicorp/vault/helper/policyutil"
+	"github.com/hashicorp/vault/helper/strutil"
 	"github.com/hashicorp/vault/logical"
 	"github.com/hashicorp/vault/logical/framework"
 )
+
+func pathUsersList(b *backend) *framework.Path {
+	return &framework.Path{
+		Pattern: "users/?$",
+
+		Callbacks: map[logical.Operation]framework.OperationFunc{
+			logical.ListOperation: b.pathUserList,
+		},
+
+		HelpSynopsis:    pathUserHelpSyn,
+		HelpDescription: pathUserHelpDesc,
+	}
+}
 
 func pathUsers(b *backend) *framework.Path {
 	return &framework.Path{
@@ -20,12 +35,17 @@ func pathUsers(b *backend) *framework.Path {
 				Type:        framework.TypeString,
 				Description: "Comma-separated list of additional groups associated with the user.",
 			},
+
+			"policies": &framework.FieldSchema{
+				Type:        framework.TypeString,
+				Description: "Comma-separated list of policies associated with the user.",
+			},
 		},
 
 		Callbacks: map[logical.Operation]framework.OperationFunc{
 			logical.DeleteOperation: b.pathUserDelete,
 			logical.ReadOperation:   b.pathUserRead,
-			logical.UpdateOperation:  b.pathUserWrite,
+			logical.UpdateOperation: b.pathUserWrite,
 		},
 
 		HelpSynopsis:    pathUserHelpSyn,
@@ -72,7 +92,8 @@ func (b *backend) pathUserRead(
 
 	return &logical.Response{
 		Data: map[string]interface{}{
-			"groups": strings.Join(user.Groups, ","),
+			"groups":   strings.Join(user.Groups, ","),
+			"policies": strings.Join(user.Policies, ","),
 		},
 	}, nil
 }
@@ -80,14 +101,16 @@ func (b *backend) pathUserRead(
 func (b *backend) pathUserWrite(
 	req *logical.Request, d *framework.FieldData) (*logical.Response, error) {
 	name := d.Get("name").(string)
-	groups := strings.Split(d.Get("groups").(string), ",")
+	groups := strutil.RemoveDuplicates(strutil.ParseStringSlice(d.Get("groups").(string), ","), false)
+	policies := policyutil.ParsePolicies(d.Get("policies").(string))
 	for i, g := range groups {
 		groups[i] = strings.TrimSpace(g)
 	}
 
 	// Store it
 	entry, err := logical.StorageEntryJSON("user/"+name, &UserEntry{
-		Groups: groups,
+		Groups:   groups,
+		Policies: policies,
 	})
 	if err != nil {
 		return nil, err
@@ -99,8 +122,18 @@ func (b *backend) pathUserWrite(
 	return nil, nil
 }
 
+func (b *backend) pathUserList(
+	req *logical.Request, d *framework.FieldData) (*logical.Response, error) {
+	users, err := req.Storage.List("user/")
+	if err != nil {
+		return nil, err
+	}
+	return logical.ListResponse(users), nil
+}
+
 type UserEntry struct {
-	Groups []string
+	Groups   []string
+	Policies []string
 }
 
 const pathUserHelpSyn = `

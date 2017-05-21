@@ -5,16 +5,17 @@ import (
 	"strings"
 
 	"github.com/hashicorp/vault/api"
+	"github.com/hashicorp/vault/meta"
 )
 
 // StatusCommand is a Command that outputs the status of whether
 // Vault is sealed or not as well as HA information.
 type StatusCommand struct {
-	Meta
+	meta.Meta
 }
 
 func (c *StatusCommand) Run(args []string) int {
-	flags := c.Meta.FlagSet("status", FlagSetDefault)
+	flags := c.Meta.FlagSet("status", meta.FlagSetDefault)
 	flags.Usage = func() { c.Ui.Error(c.Help()) }
 	if err := flags.Parse(args); err != nil {
 		return 1
@@ -33,15 +34,26 @@ func (c *StatusCommand) Run(args []string) int {
 			"Error checking seal status: %s", err))
 		return 1
 	}
-	c.Ui.Output(fmt.Sprintf(
+
+	outStr := fmt.Sprintf(
 		"Sealed: %v\n"+
 			"Key Shares: %d\n"+
 			"Key Threshold: %d\n"+
-			"Unseal Progress: %d",
+			"Unseal Progress: %d\n"+
+			"Unseal Nonce: %v\n"+
+			"Version: %s",
 		sealStatus.Sealed,
 		sealStatus.N,
 		sealStatus.T,
-		sealStatus.Progress))
+		sealStatus.Progress,
+		sealStatus.Nonce,
+		sealStatus.Version)
+
+	if sealStatus.ClusterName != "" && sealStatus.ClusterID != "" {
+		outStr = fmt.Sprintf("%s\nCluster Name: %s\nCluster ID: %s", outStr, sealStatus.ClusterName, sealStatus.ClusterID)
+	}
+
+	c.Ui.Output(outStr)
 
 	// Mask the 'Vault is sealed' error, since this means HA is enabled,
 	// but that we cannot query for the leader since we are sealed.
@@ -97,7 +109,6 @@ Usage: vault status [options]
   code also reflects the seal status (0 unsealed, 2 sealed, 1 error).
 
 General Options:
-
-  ` + generalOptionsUsage()
+` + meta.GeneralOptionsUsage()
 	return strings.TrimSpace(helpText)
 }

@@ -2,12 +2,14 @@ package kvbuilder
 
 import (
 	"bytes"
-	"encoding/json"
 	"fmt"
 	"io"
 	"io/ioutil"
 	"os"
 	"strings"
+
+	"github.com/hashicorp/vault/helper/jsonutil"
+	"github.com/mitchellh/mapstructure"
 )
 
 // Builder is a struct to build a key/value mapping based on a list
@@ -106,11 +108,21 @@ func (b *Builder) add(raw string) error {
 		}
 	}
 
+	// Repeated keys will be converted into a slice
+	if existingValue, ok := b.result[key]; ok {
+		var sliceValue []interface{}
+		if err := mapstructure.WeakDecode(existingValue, &sliceValue); err != nil {
+			return err
+		}
+		sliceValue = append(sliceValue, value)
+		b.result[key] = sliceValue
+		return nil
+	}
+
 	b.result[key] = value
 	return nil
 }
 
 func (b *Builder) addReader(r io.Reader) error {
-	dec := json.NewDecoder(r)
-	return dec.Decode(&b.result)
+	return jsonutil.DecodeJSONFromReader(r, &b.result)
 }

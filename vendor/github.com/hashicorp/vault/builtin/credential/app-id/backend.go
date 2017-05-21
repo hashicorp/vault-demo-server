@@ -2,6 +2,7 @@ package appId
 
 import (
 	"fmt"
+	"sync"
 
 	"github.com/hashicorp/vault/helper/salt"
 	"github.com/hashicorp/vault/logical"
@@ -17,20 +18,10 @@ func Factory(conf *logical.BackendConfig) (logical.Backend, error) {
 }
 
 func Backend(conf *logical.BackendConfig) (*framework.Backend, error) {
-	// Initialize the salt
-	salt, err := salt.NewSalt(conf.StorageView, &salt.Config{
-		HashFunc: salt.SHA1Hash,
-	})
-	if err != nil {
-		return nil, err
-	}
-
 	var b backend
-	b.Salt = salt
 	b.MapAppId = &framework.PolicyMap{
 		PathMap: framework.PathMap{
 			Name: "app-id",
-			Salt: salt,
 			Schema: map[string]*framework.FieldSchema{
 				"display_name": &framework.FieldSchema{
 					Type:        framework.TypeString,
@@ -48,7 +39,6 @@ func Backend(conf *logical.BackendConfig) (*framework.Backend, error) {
 
 	b.MapUserId = &framework.PathMap{
 		Name: "user-id",
-		Salt: salt,
 		Schema: map[string]*framework.FieldSchema{
 			"cidr_block": &framework.FieldSchema{
 				Type:        framework.TypeString,
@@ -68,28 +58,26 @@ func Backend(conf *logical.BackendConfig) (*framework.Backend, error) {
 		PathsSpecial: &logical.Paths{
 			Unauthenticated: []string{
 				"login",
+				"login/*",
 			},
 		},
 
 		Paths: framework.PathAppend([]*framework.Path{
 			pathLogin(&b),
+			pathLoginWithAppIDPath(&b),
 		},
 			b.MapAppId.Paths(),
 			b.MapUserId.Paths(),
 		),
 
 		AuthRenew: b.pathLoginRenew,
+
+		Init: b.initialize,
+
+		Invalidate: b.invalidate,
 	}
 
-	// Since the salt is new in 0.2, we need to handle this by migrating
-	// any existing keys to use the salt. We can deprecate this eventually,
-	// but for now we want a smooth upgrade experience by automatically
-	// upgrading to use salting.
-	if salt.DidGenerate() {
-		if err := b.upgradeToSalted(conf.StorageView); err != nil {
-			return nil, err
-		}
-	}
+	b.view = conf.StorageView
 
 	return b.Backend, nil
 }
@@ -98,8 +86,41 @@ type backend struct {
 	*framework.Backend
 
 	Salt      *salt.Salt
+	SaltMutex sync.RWMutex
+	view      logical.Storage
 	MapAppId  *framework.PolicyMap
 	MapUserId *framework.PathMap
+}
+
+func (b *backend) initialize() error {
+	b.SaltMutex.Lock()
+	salt, err := salt.NewSalt(b.view, &salt.Config{
+		HashFunc: salt.SHA1Hash,
+		Location: salt.DefaultLocation,
+	})
+	if err != nil {
+		b.SaltMutex.Unlock()
+		return err
+	}
+	b.Salt = salt
+	b.SaltMutex.Unlock()
+
+	b.MapAppId.Salt = salt
+	b.MapAppId.SaltMutex = &b.SaltMutex
+	b.MapUserId.Salt = salt
+	b.MapUserId.SaltMutex = &b.SaltMutex
+
+	// Since the salt is new in 0.2, we need to handle this by migrating
+	// any existing keys to use the salt. We can deprecate this eventually,
+	// but for now we want a smooth upgrade experience by automatically
+	// upgrading to use salting.
+	if salt.DidGenerate() {
+		if err := b.upgradeToSalted(b.view); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 // upgradeToSalted is used to upgrade the non-salted keys prior to
@@ -161,6 +182,14 @@ func (b *backend) upgradeToSalted(view logical.Storage) error {
 		}
 	}
 	return nil
+}
+
+func (b *backend) invalidate(key string) {
+	switch key {
+	case salt.DefaultLocation:
+		// reread the salt
+		b.initialize()
+	}
 }
 
 const backendHelp = `

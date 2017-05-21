@@ -7,17 +7,20 @@ import (
 	"math/rand"
 	"net"
 	"net/http"
+	"os"
 	"strconv"
 	"sync"
 
 	"github.com/hashicorp/vault/builtin/logical/pki"
 	"github.com/hashicorp/vault/builtin/logical/transit"
 	vaultcli "github.com/hashicorp/vault/cli"
-	vaultcommand "github.com/hashicorp/vault/command"
+	vaulttoken "github.com/hashicorp/vault/command/token"
 	vaulthttp "github.com/hashicorp/vault/http"
 	"github.com/hashicorp/vault/logical"
+	vaultmeta "github.com/hashicorp/vault/meta"
 	"github.com/hashicorp/vault/physical"
 	"github.com/hashicorp/vault/vault"
+	"github.com/mgutz/logxi/v1"
 	"github.com/mitchellh/cli"
 )
 
@@ -34,14 +37,16 @@ type client struct {
 
 // NewClient creates a new in-memory vault.
 func NewClient() (*client, error) {
+	// Create a logger
 	// Create the core, sealed and in-memory
 	core, err := vault.NewCore(&vault.CoreConfig{
 		// Heroku doesn't support mlock syscall
 		DisableMlock: true,
 
 		Physical: &Physical{
-			Backend: physical.NewInmem(),
-			Limit:   64000,
+			Backend: physical.NewInmem(log.NewLogger(
+				os.Stderr, "vault-demo-server")),
+			Limit: 64000,
 		},
 
 		LogicalBackends: map[string]logical.Factory{
@@ -73,15 +78,17 @@ func (v *client) CLI(raw []string) (int, string, string) {
 	var stdout, stderr bytes.Buffer
 
 	// Build our CLI commands
-	commands := vaultcli.Commands(&vaultcommand.Meta{
+	commands := vaultcli.Commands(&vaultmeta.Meta{
 		Ui: &cli.BasicUi{
 			Writer:      &stdout,
 			ErrorWriter: &stderr,
 		},
 
 		ForceAddress: fmt.Sprintf("http://%s", v.listener.Addr()),
-		ForceConfig: &vaultcommand.Config{
-			TokenHelper: fmt.Sprintf("%s -token=%s", selfPath, v.id),
+		TokenHelper: func() (vaulttoken.TokenHelper, error) {
+			return &vaulttoken.ExternalTokenHelper{
+				BinaryPath: fmt.Sprintf("%s -token=%s", selfPath, v.id),
+			}, nil
 		},
 	})
 

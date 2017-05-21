@@ -3,16 +3,15 @@ package command
 import (
 	"flag"
 	"fmt"
-	"os"
-	"reflect"
 	"strings"
 
 	"github.com/hashicorp/vault/api"
+	"github.com/hashicorp/vault/meta"
 )
 
 // ReadCommand is a Command that reads data from the Vault.
 type ReadCommand struct {
-	Meta
+	meta.Meta
 }
 
 func (c *ReadCommand) Run(args []string) int {
@@ -21,7 +20,7 @@ func (c *ReadCommand) Run(args []string) int {
 	var err error
 	var secret *api.Secret
 	var flags *flag.FlagSet
-	flags = c.Meta.FlagSet("read", FlagSetDefault)
+	flags = c.Meta.FlagSet("read", meta.FlagSetDefault)
 	flags.StringVar(&format, "format", "table", "")
 	flags.StringVar(&field, "field", "", "")
 	flags.Usage = func() { c.Ui.Error(c.Help()) }
@@ -62,23 +61,7 @@ func (c *ReadCommand) Run(args []string) int {
 
 	// Handle single field output
 	if field != "" {
-		if val, ok := secret.Data[field]; ok {
-			// c.Ui.Output() prints a CR character which in this case is
-			// not desired. Since Vault CLI currently only uses BasicUi,
-			// which writes to standard output, os.Stdout is used here to
-			// directly print the message. If mitchellh/cli exposes method
-			// to print without CR, this check needs to be removed.
-			if reflect.TypeOf(c.Ui).String() == "*cli.BasicUi" {
-				fmt.Fprintf(os.Stdout, val.(string))
-			} else {
-				c.Ui.Output(val.(string))
-			}
-			return 0
-		} else {
-			c.Ui.Error(fmt.Sprintf(
-				"Field %s not present in secret", field))
-			return 1
-		}
+		return PrintRawField(c.Ui, secret, field)
 	}
 
 	return OutputSecret(c.Ui, format, secret)
@@ -100,9 +83,7 @@ Usage: vault read [options] path
   backends in use to determine key structure.
 
 General Options:
-
-  ` + generalOptionsUsage() + `
-
+` + meta.GeneralOptionsUsage() + `
 Read Options:
 
   -format=table           The format for output. By default it is a whitespace-

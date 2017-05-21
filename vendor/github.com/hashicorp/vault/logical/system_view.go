@@ -1,6 +1,13 @@
 package logical
 
-import "time"
+import (
+	"errors"
+	"time"
+
+	"github.com/hashicorp/vault/helper/consts"
+	"github.com/hashicorp/vault/helper/pluginutil"
+	"github.com/hashicorp/vault/helper/wrapping"
+)
 
 // SystemView exposes system configuration information in a safe way
 // for logical backends to consume
@@ -26,13 +33,36 @@ type SystemView interface {
 	// when the stored CRL will be removed during the unmounting process
 	// anyways), we can ignore the errors to allow unmounting to complete.
 	Tainted() bool
+
+	// Returns true if caching is disabled. If true, no caches should be used,
+	// despite known slowdowns.
+	CachingDisabled() bool
+
+	// ReplicationState indicates the state of cluster replication
+	ReplicationState() consts.ReplicationState
+
+	// ResponseWrapData wraps the given data in a cubbyhole and returns the
+	// token used to unwrap.
+	ResponseWrapData(data map[string]interface{}, ttl time.Duration, jwt bool) (*wrapping.ResponseWrapInfo, error)
+
+	// LookupPlugin looks into the plugin catalog for a plugin with the given
+	// name. Returns a PluginRunner or an error if a plugin can not be found.
+	LookupPlugin(string) (*pluginutil.PluginRunner, error)
+
+	// MlockEnabled returns the configuration setting for enabling mlock on
+	// plugins.
+	MlockEnabled() bool
 }
 
 type StaticSystemView struct {
-	DefaultLeaseTTLVal time.Duration
-	MaxLeaseTTLVal     time.Duration
-	SudoPrivilegeVal   bool
-	TaintedVal         bool
+	DefaultLeaseTTLVal  time.Duration
+	MaxLeaseTTLVal      time.Duration
+	SudoPrivilegeVal    bool
+	TaintedVal          bool
+	CachingDisabledVal  bool
+	Primary             bool
+	EnableMlock         bool
+	ReplicationStateVal consts.ReplicationState
 }
 
 func (d StaticSystemView) DefaultLeaseTTL() time.Duration {
@@ -49,4 +79,24 @@ func (d StaticSystemView) SudoPrivilege(path string, token string) bool {
 
 func (d StaticSystemView) Tainted() bool {
 	return d.TaintedVal
+}
+
+func (d StaticSystemView) CachingDisabled() bool {
+	return d.CachingDisabledVal
+}
+
+func (d StaticSystemView) ReplicationState() consts.ReplicationState {
+	return d.ReplicationStateVal
+}
+
+func (d StaticSystemView) ResponseWrapData(data map[string]interface{}, ttl time.Duration, jwt bool) (*wrapping.ResponseWrapInfo, error) {
+	return nil, errors.New("ResponseWrapData is not implemented in StaticSystemView")
+}
+
+func (d StaticSystemView) LookupPlugin(name string) (*pluginutil.PluginRunner, error) {
+	return nil, errors.New("LookupPlugin is not implemented in StaticSystemView")
+}
+
+func (d StaticSystemView) MlockEnabled() bool {
+	return d.EnableMlock
 }
