@@ -1,11 +1,27 @@
 package ldap
 
 import (
+	"context"
 	"strings"
 
+	"github.com/hashicorp/vault/helper/policyutil"
+	"github.com/hashicorp/vault/helper/strutil"
 	"github.com/hashicorp/vault/logical"
 	"github.com/hashicorp/vault/logical/framework"
 )
+
+func pathUsersList(b *backend) *framework.Path {
+	return &framework.Path{
+		Pattern: "users/?$",
+
+		Callbacks: map[logical.Operation]framework.OperationFunc{
+			logical.ListOperation: b.pathUserList,
+		},
+
+		HelpSynopsis:    pathUserHelpSyn,
+		HelpDescription: pathUserHelpDesc,
+	}
+}
 
 func pathUsers(b *backend) *framework.Path {
 	return &framework.Path{
@@ -20,12 +36,17 @@ func pathUsers(b *backend) *framework.Path {
 				Type:        framework.TypeString,
 				Description: "Comma-separated list of additional groups associated with the user.",
 			},
+
+			"policies": &framework.FieldSchema{
+				Type:        framework.TypeCommaStringSlice,
+				Description: "Comma-separated list of policies associated with the user.",
+			},
 		},
 
 		Callbacks: map[logical.Operation]framework.OperationFunc{
 			logical.DeleteOperation: b.pathUserDelete,
 			logical.ReadOperation:   b.pathUserRead,
-			logical.UpdateOperation:  b.pathUserWrite,
+			logical.UpdateOperation: b.pathUserWrite,
 		},
 
 		HelpSynopsis:    pathUserHelpSyn,
@@ -33,8 +54,8 @@ func pathUsers(b *backend) *framework.Path {
 	}
 }
 
-func (b *backend) User(s logical.Storage, n string) (*UserEntry, error) {
-	entry, err := s.Get("user/" + n)
+func (b *backend) User(ctx context.Context, s logical.Storage, n string) (*UserEntry, error) {
+	entry, err := s.Get(ctx, "user/"+n)
 	if err != nil {
 		return nil, err
 	}
@@ -50,9 +71,8 @@ func (b *backend) User(s logical.Storage, n string) (*UserEntry, error) {
 	return &result, nil
 }
 
-func (b *backend) pathUserDelete(
-	req *logical.Request, d *framework.FieldData) (*logical.Response, error) {
-	err := req.Storage.Delete("user/" + d.Get("name").(string))
+func (b *backend) pathUserDelete(ctx context.Context, req *logical.Request, d *framework.FieldData) (*logical.Response, error) {
+	err := req.Storage.Delete(ctx, "user/"+d.Get("name").(string))
 	if err != nil {
 		return nil, err
 	}
@@ -60,9 +80,8 @@ func (b *backend) pathUserDelete(
 	return nil, nil
 }
 
-func (b *backend) pathUserRead(
-	req *logical.Request, d *framework.FieldData) (*logical.Response, error) {
-	user, err := b.User(req.Storage, d.Get("name").(string))
+func (b *backend) pathUserRead(ctx context.Context, req *logical.Request, d *framework.FieldData) (*logical.Response, error) {
+	user, err := b.User(ctx, req.Storage, d.Get("name").(string))
 	if err != nil {
 		return nil, err
 	}
@@ -72,35 +91,46 @@ func (b *backend) pathUserRead(
 
 	return &logical.Response{
 		Data: map[string]interface{}{
-			"groups": strings.Join(user.Groups, ","),
+			"groups":   strings.Join(user.Groups, ","),
+			"policies": user.Policies,
 		},
 	}, nil
 }
 
-func (b *backend) pathUserWrite(
-	req *logical.Request, d *framework.FieldData) (*logical.Response, error) {
+func (b *backend) pathUserWrite(ctx context.Context, req *logical.Request, d *framework.FieldData) (*logical.Response, error) {
 	name := d.Get("name").(string)
-	groups := strings.Split(d.Get("groups").(string), ",")
+	groups := strutil.RemoveDuplicates(strutil.ParseStringSlice(d.Get("groups").(string), ","), false)
+	policies := policyutil.ParsePolicies(d.Get("policies"))
 	for i, g := range groups {
 		groups[i] = strings.TrimSpace(g)
 	}
 
 	// Store it
 	entry, err := logical.StorageEntryJSON("user/"+name, &UserEntry{
-		Groups: groups,
+		Groups:   groups,
+		Policies: policies,
 	})
 	if err != nil {
 		return nil, err
 	}
-	if err := req.Storage.Put(entry); err != nil {
+	if err := req.Storage.Put(ctx, entry); err != nil {
 		return nil, err
 	}
 
 	return nil, nil
 }
 
+func (b *backend) pathUserList(ctx context.Context, req *logical.Request, d *framework.FieldData) (*logical.Response, error) {
+	users, err := req.Storage.List(ctx, "user/")
+	if err != nil {
+		return nil, err
+	}
+	return logical.ListResponse(users), nil
+}
+
 type UserEntry struct {
-	Groups []string
+	Groups   []string
+	Policies []string
 }
 
 const pathUserHelpSyn = `

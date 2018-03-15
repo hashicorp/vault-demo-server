@@ -1,10 +1,12 @@
 package cassandra
 
 import (
+	"context"
 	"fmt"
 	"time"
 
 	"github.com/fatih/structs"
+	"github.com/gocql/gocql"
 	"github.com/hashicorp/vault/logical"
 	"github.com/hashicorp/vault/logical/framework"
 )
@@ -54,6 +56,12 @@ template values are '{{username}}' and
 				Default:     "4h",
 				Description: "The lease length; defaults to 4 hours",
 			},
+
+			"consistency": &framework.FieldSchema{
+				Type:        framework.TypeString,
+				Default:     "Quorum",
+				Description: "The consistency level for the operations; defaults to Quorum.",
+			},
 		},
 
 		Callbacks: map[logical.Operation]framework.OperationFunc{
@@ -67,8 +75,8 @@ template values are '{{username}}' and
 	}
 }
 
-func getRole(s logical.Storage, n string) (*roleEntry, error) {
-	entry, err := s.Get("role/" + n)
+func getRole(ctx context.Context, s logical.Storage, n string) (*roleEntry, error) {
+	entry, err := s.Get(ctx, "role/"+n)
 	if err != nil {
 		return nil, err
 	}
@@ -84,9 +92,8 @@ func getRole(s logical.Storage, n string) (*roleEntry, error) {
 	return &result, nil
 }
 
-func (b *backend) pathRoleDelete(
-	req *logical.Request, data *framework.FieldData) (*logical.Response, error) {
-	err := req.Storage.Delete("role/" + data.Get("name").(string))
+func (b *backend) pathRoleDelete(ctx context.Context, req *logical.Request, data *framework.FieldData) (*logical.Response, error) {
+	err := req.Storage.Delete(ctx, "role/"+data.Get("name").(string))
 	if err != nil {
 		return nil, err
 	}
@@ -94,9 +101,8 @@ func (b *backend) pathRoleDelete(
 	return nil, nil
 }
 
-func (b *backend) pathRoleRead(
-	req *logical.Request, data *framework.FieldData) (*logical.Response, error) {
-	role, err := getRole(req.Storage, data.Get("name").(string))
+func (b *backend) pathRoleRead(ctx context.Context, req *logical.Request, data *framework.FieldData) (*logical.Response, error) {
+	role, err := getRole(ctx, req.Storage, data.Get("name").(string))
 	if err != nil {
 		return nil, err
 	}
@@ -109,8 +115,7 @@ func (b *backend) pathRoleRead(
 	}, nil
 }
 
-func (b *backend) pathRoleCreate(
-	req *logical.Request, data *framework.FieldData) (*logical.Response, error) {
+func (b *backend) pathRoleCreate(ctx context.Context, req *logical.Request, data *framework.FieldData) (*logical.Response, error) {
 	name := data.Get("name").(string)
 
 	creationCQL := data.Get("creation_cql").(string)
@@ -124,10 +129,18 @@ func (b *backend) pathRoleCreate(
 			"Error parsing lease value of %s: %s", leaseRaw, err)), nil
 	}
 
+	consistencyStr := data.Get("consistency").(string)
+	_, err = gocql.ParseConsistencyWrapper(consistencyStr)
+	if err != nil {
+		return logical.ErrorResponse(fmt.Sprintf(
+			"Error parsing consistency value of %q: %v", consistencyStr, err)), nil
+	}
+
 	entry := &roleEntry{
 		Lease:       lease,
 		CreationCQL: creationCQL,
 		RollbackCQL: rollbackCQL,
+		Consistency: consistencyStr,
 	}
 
 	// Store it
@@ -135,7 +148,7 @@ func (b *backend) pathRoleCreate(
 	if err != nil {
 		return nil, err
 	}
-	if err := req.Storage.Put(entryJSON); err != nil {
+	if err := req.Storage.Put(ctx, entryJSON); err != nil {
 		return nil, err
 	}
 
@@ -146,6 +159,7 @@ type roleEntry struct {
 	CreationCQL string        `json:"creation_cql" structs:"creation_cql"`
 	Lease       time.Duration `json:"lease" structs:"lease"`
 	RollbackCQL string        `json:"rollback_cql" structs:"rollback_cql"`
+	Consistency string        `json:"consistency" structs:"consistency"`
 }
 
 const pathRoleHelpSyn = `

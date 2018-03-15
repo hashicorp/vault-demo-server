@@ -1,43 +1,43 @@
 package cert
 
 import (
+	"context"
+	"strings"
 	"sync"
 
 	"github.com/hashicorp/vault/logical"
 	"github.com/hashicorp/vault/logical/framework"
 )
 
-func Factory(conf *logical.BackendConfig) (logical.Backend, error) {
+func Factory(ctx context.Context, conf *logical.BackendConfig) (logical.Backend, error) {
 	b := Backend()
-	_, err := b.Setup(conf)
-	if err != nil {
-		return b, err
+	if err := b.Setup(ctx, conf); err != nil {
+		return nil, err
 	}
-	return b, b.populateCRLs(conf.StorageView)
+	return b, nil
 }
 
 func Backend() *backend {
 	var b backend
 	b.Backend = &framework.Backend{
 		Help: backendHelp,
-
 		PathsSpecial: &logical.Paths{
 			Unauthenticated: []string{
 				"login",
 			},
 		},
-
 		Paths: append([]*framework.Path{
 			pathConfig(&b),
 			pathLogin(&b),
+			pathListCerts(&b),
 			pathCerts(&b),
 			pathCRLs(&b),
 		}),
-
-		AuthRenew: b.pathLoginRenew,
+		AuthRenew:   b.pathLoginRenew,
+		Invalidate:  b.invalidate,
+		BackendType: logical.TypeCredential,
 	}
 
-	b.crls = map[string]CRLInfo{}
 	b.crlUpdateMutex = &sync.RWMutex{}
 
 	return &b
@@ -49,6 +49,15 @@ type backend struct {
 
 	crls           map[string]CRLInfo
 	crlUpdateMutex *sync.RWMutex
+}
+
+func (b *backend) invalidate(_ context.Context, key string) {
+	switch {
+	case strings.HasPrefix(key, "crls/"):
+		b.crlUpdateMutex.Lock()
+		defer b.crlUpdateMutex.Unlock()
+		b.crls = nil
+	}
 }
 
 const backendHelp = `

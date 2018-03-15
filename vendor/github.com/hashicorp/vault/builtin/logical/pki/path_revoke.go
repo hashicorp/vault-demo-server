@@ -1,9 +1,11 @@
 package pki
 
 import (
+	"context"
 	"fmt"
+	"strings"
 
-	"github.com/hashicorp/vault/helper/certutil"
+	"github.com/hashicorp/vault/helper/errutil"
 	"github.com/hashicorp/vault/logical"
 	"github.com/hashicorp/vault/logical/framework"
 )
@@ -41,27 +43,31 @@ func pathRotateCRL(b *backend) *framework.Path {
 	}
 }
 
-func (b *backend) pathRevokeWrite(req *logical.Request, data *framework.FieldData) (*logical.Response, error) {
+func (b *backend) pathRevokeWrite(ctx context.Context, req *logical.Request, data *framework.FieldData) (*logical.Response, error) {
 	serial := data.Get("serial_number").(string)
 	if len(serial) == 0 {
 		return logical.ErrorResponse("The serial number must be provided"), nil
 	}
 
+	// We store and identify by lowercase colon-separated hex, but other
+	// utilities use dashes and/or uppercase, so normalize
+	serial = strings.Replace(strings.ToLower(serial), "-", ":", -1)
+
 	b.revokeStorageLock.Lock()
 	defer b.revokeStorageLock.Unlock()
 
-	return revokeCert(b, req, serial)
+	return revokeCert(ctx, b, req, serial, false)
 }
 
-func (b *backend) pathRotateCRLRead(req *logical.Request, data *framework.FieldData) (*logical.Response, error) {
+func (b *backend) pathRotateCRLRead(ctx context.Context, req *logical.Request, data *framework.FieldData) (*logical.Response, error) {
 	b.revokeStorageLock.RLock()
 	defer b.revokeStorageLock.RUnlock()
 
-	crlErr := buildCRL(b, req)
+	crlErr := buildCRL(ctx, b, req)
 	switch crlErr.(type) {
-	case certutil.UserError:
+	case errutil.UserError:
 		return logical.ErrorResponse(fmt.Sprintf("Error during CRL building: %s", crlErr)), nil
-	case certutil.InternalError:
+	case errutil.InternalError:
 		return nil, fmt.Errorf("Error encountered during CRL building: %s", crlErr)
 	default:
 		return &logical.Response{

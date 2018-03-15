@@ -1,10 +1,14 @@
 package audit
 
 import (
+	"errors"
 	"reflect"
 	"strings"
+	"time"
 
 	"github.com/hashicorp/vault/helper/salt"
+	"github.com/hashicorp/vault/helper/strutil"
+	"github.com/hashicorp/vault/helper/wrapping"
 	"github.com/hashicorp/vault/logical"
 	"github.com/mitchellh/copystructure"
 	"github.com/mitchellh/reflectwalk"
@@ -20,7 +24,7 @@ func HashString(salter *salt.Salt, data string) string {
 // it will be passed through.
 //
 // The structure is modified in-place.
-func Hash(salter *salt.Salt, raw interface{}) error {
+func Hash(salter *salt.Salt, raw interface{}, nonHMACDataKeys []string) error {
 	fn := salter.GetIdentifiedHMAC
 
 	switch s := raw.(type) {
@@ -29,8 +33,10 @@ func Hash(salter *salt.Salt, raw interface{}) error {
 			return nil
 		}
 		if s.ClientToken != "" {
-			token := fn(s.ClientToken)
-			s.ClientToken = token
+			s.ClientToken = fn(s.ClientToken)
+		}
+		if s.Accessor != "" {
+			s.Accessor = fn(s.Accessor)
 		}
 
 	case *logical.Request:
@@ -38,17 +44,20 @@ func Hash(salter *salt.Salt, raw interface{}) error {
 			return nil
 		}
 		if s.Auth != nil {
-			if err := Hash(salter, s.Auth); err != nil {
+			if err := Hash(salter, s.Auth, nil); err != nil {
 				return err
 			}
 		}
 
 		if s.ClientToken != "" {
-			token := fn(s.ClientToken)
-			s.ClientToken = token
+			s.ClientToken = fn(s.ClientToken)
 		}
 
-		data, err := HashStructure(s.Data, fn)
+		if s.ClientTokenAccessor != "" {
+			s.ClientTokenAccessor = fn(s.ClientTokenAccessor)
+		}
+
+		data, err := HashStructure(s.Data, fn, nonHMACDataKeys)
 		if err != nil {
 			return err
 		}
@@ -61,17 +70,35 @@ func Hash(salter *salt.Salt, raw interface{}) error {
 		}
 
 		if s.Auth != nil {
-			if err := Hash(salter, s.Auth); err != nil {
+			if err := Hash(salter, s.Auth, nil); err != nil {
 				return err
 			}
 		}
 
-		data, err := HashStructure(s.Data, fn)
+		if s.WrapInfo != nil {
+			if err := Hash(salter, s.WrapInfo, nil); err != nil {
+				return err
+			}
+		}
+
+		data, err := HashStructure(s.Data, fn, nonHMACDataKeys)
 		if err != nil {
 			return err
 		}
 
 		s.Data = data.(map[string]interface{})
+
+	case *wrapping.ResponseWrapInfo:
+		if s == nil {
+			return nil
+		}
+
+		s.Token = fn(s.Token)
+		s.Accessor = fn(s.Accessor)
+
+		if s.WrappedAccessor != "" {
+			s.WrappedAccessor = fn(s.WrappedAccessor)
+		}
 	}
 
 	return nil
@@ -81,13 +108,13 @@ func Hash(salter *salt.Salt, raw interface{}) error {
 // the structure. Only _values_ are hashed: keys of objects are not.
 //
 // For the HashCallback, see the built-in HashCallbacks below.
-func HashStructure(s interface{}, cb HashCallback) (interface{}, error) {
+func HashStructure(s interface{}, cb HashCallback, ignoredKeys []string) (interface{}, error) {
 	s, err := copystructure.Copy(s)
 	if err != nil {
 		return nil, err
 	}
 
-	walker := &hashWalker{Callback: cb}
+	walker := &hashWalker{Callback: cb, IgnoredKeys: ignoredKeys}
 	if err := reflectwalk.Walk(s, walker); err != nil {
 		return nil, err
 	}
@@ -108,6 +135,9 @@ type hashWalker struct {
 	// immediately and the error returned.
 	Callback HashCallback
 
+	// IgnoreKeys are the keys that wont have the HashCallback applied
+	IgnoredKeys []string
+
 	key         []string
 	lastValue   reflect.Value
 	loc         reflectwalk.Location
@@ -117,6 +147,12 @@ type hashWalker struct {
 	sliceIndex  int
 	unknownKeys []string
 }
+
+// hashTimeType stores a pre-computed reflect.Type for a time.Time so
+// we can quickly compare in hashWalker.Struct. We create an empty/invalid
+// time.Time{} so we don't need to incur any additional startup cost vs.
+// Now() or Unix().
+var hashTimeType = reflect.TypeOf(time.Time{})
 
 func (w *hashWalker) Enter(loc reflectwalk.Location) error {
 	w.loc = loc
@@ -165,6 +201,35 @@ func (w *hashWalker) SliceElem(i int, elem reflect.Value) error {
 	return nil
 }
 
+func (w *hashWalker) Struct(v reflect.Value) error {
+	// We are looking for time values. If it isn't one, ignore it.
+	if v.Type() != hashTimeType {
+		return nil
+	}
+
+	// If we aren't in a map value, return an error to prevent a panic
+	if v.Interface() != w.lastValue.Interface() {
+		return errors.New("time.Time value in a non map key cannot be hashed for audits")
+	}
+
+	// Create a string value of the time. IMPORTANT: this must never change
+	// across Vault versions or the hash value of equivalent time.Time will
+	// change.
+	strVal := v.Interface().(time.Time).Format(time.RFC3339Nano)
+
+	// Set the map value to the string instead of the time.Time object
+	m := w.cs[len(w.cs)-1]
+	mk := w.csData.(reflect.Value)
+	m.SetMapIndex(mk, reflect.ValueOf(strVal))
+
+	// Skip this entry so that we don't walk the struct.
+	return reflectwalk.SkipEntry
+}
+
+func (w *hashWalker) StructField(reflect.StructField, reflect.Value) error {
+	return nil
+}
+
 func (w *hashWalker) Primitive(v reflect.Value) error {
 	if w.Callback == nil {
 		return nil
@@ -183,6 +248,12 @@ func (w *hashWalker) Primitive(v reflect.Value) error {
 		v = v.Elem()
 	}
 	if v.Kind() != reflect.String {
+		return nil
+	}
+
+	// See if the current key is part of the ignored keys
+	currentKey := w.key[len(w.key)-1]
+	if strutil.StrListContains(w.IgnoredKeys, currentKey) {
 		return nil
 	}
 

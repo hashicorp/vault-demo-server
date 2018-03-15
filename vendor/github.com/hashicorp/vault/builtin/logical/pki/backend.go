@@ -1,6 +1,7 @@
 package pki
 
 import (
+	"context"
 	"strings"
 	"sync"
 	"time"
@@ -10,12 +11,16 @@ import (
 )
 
 // Factory creates a new backend implementing the logical.Backend interface
-func Factory(conf *logical.BackendConfig) (logical.Backend, error) {
-	return Backend().Setup(conf)
+func Factory(ctx context.Context, conf *logical.BackendConfig) (logical.Backend, error) {
+	b := Backend()
+	if err := b.Setup(ctx, conf); err != nil {
+		return nil, err
+	}
+	return b, nil
 }
 
 // Backend returns a new Backend framework struct
-func Backend() *framework.Backend {
+func Backend() *backend {
 	var b backend
 	b.Backend = &framework.Backend{
 		Help: strings.TrimSpace(backendHelp),
@@ -24,9 +29,25 @@ func Backend() *framework.Backend {
 			Unauthenticated: []string{
 				"cert/*",
 				"ca/pem",
+				"ca_chain",
 				"ca",
 				"crl/pem",
 				"crl",
+			},
+
+			LocalStorage: []string{
+				"revoked/",
+				"crl",
+				"certs/",
+			},
+
+			Root: []string{
+				"root",
+				"root/sign-self-issued",
+			},
+
+			SealWrapStorage: []string{
+				"config/ca_bundle",
 			},
 		},
 
@@ -34,9 +55,11 @@ func Backend() *framework.Backend {
 			pathListRoles(&b),
 			pathRoles(&b),
 			pathGenerateRoot(&b),
+			pathSignIntermediate(&b),
+			pathSignSelfIssued(&b),
+			pathDeleteRoot(&b),
 			pathGenerateIntermediate(&b),
 			pathSetSignedIntermediate(&b),
-			pathSignIntermediate(&b),
 			pathConfigCA(&b),
 			pathConfigCRL(&b),
 			pathConfigURLs(&b),
@@ -45,9 +68,11 @@ func Backend() *framework.Backend {
 			pathIssue(&b),
 			pathRotateCRL(&b),
 			pathFetchCA(&b),
+			pathFetchCAChain(&b),
 			pathFetchCRL(&b),
 			pathFetchCRLViaCertPath(&b),
 			pathFetchValid(&b),
+			pathFetchListCerts(&b),
 			pathRevoke(&b),
 			pathTidy(&b),
 		},
@@ -55,11 +80,13 @@ func Backend() *framework.Backend {
 		Secrets: []*framework.Secret{
 			secretCerts(&b),
 		},
+
+		BackendType: logical.TypeLogical,
 	}
 
 	b.crlLifetime = time.Hour * 72
 
-	return b.Backend
+	return &b
 }
 
 type backend struct {

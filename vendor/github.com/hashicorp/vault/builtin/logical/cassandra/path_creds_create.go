@@ -1,11 +1,14 @@
 package cassandra
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"time"
 
+	"github.com/gocql/gocql"
 	"github.com/hashicorp/go-uuid"
+	"github.com/hashicorp/vault/helper/strutil"
 	"github.com/hashicorp/vault/logical"
 	"github.com/hashicorp/vault/logical/framework"
 )
@@ -29,12 +32,11 @@ func pathCredsCreate(b *backend) *framework.Path {
 	}
 }
 
-func (b *backend) pathCredsCreateRead(
-	req *logical.Request, data *framework.FieldData) (*logical.Response, error) {
+func (b *backend) pathCredsCreateRead(ctx context.Context, req *logical.Request, data *framework.FieldData) (*logical.Response, error) {
 	name := data.Get("name").(string)
 
 	// Get the role
-	role, err := getRole(req.Storage, name)
+	role, err := getRole(ctx, req.Storage, name)
 	if err != nil {
 		return nil, err
 	}
@@ -47,26 +49,47 @@ func (b *backend) pathCredsCreateRead(
 	if err != nil {
 		return nil, err
 	}
-	username := fmt.Sprintf("vault_%s_%s_%s_%d", name, displayName, strings.Replace(userUUID, "-", "_", -1), time.Now().Unix())
+	username := fmt.Sprintf("vault_%s_%s_%s_%d", name, displayName, userUUID, time.Now().Unix())
+	username = strings.Replace(username, "-", "_", -1)
 	password, err := uuid.GenerateUUID()
 	if err != nil {
 		return nil, err
 	}
 
 	// Get our connection
-	session, err := b.DB(req.Storage)
+	session, err := b.DB(ctx, req.Storage)
 	if err != nil {
 		return nil, err
 	}
 
+	// Set consistency
+	if role.Consistency != "" {
+		consistencyValue, err := gocql.ParseConsistencyWrapper(role.Consistency)
+		if err != nil {
+			return nil, err
+		}
+
+		session.SetConsistency(consistencyValue)
+	}
+
 	// Execute each query
-	for _, query := range splitSQL(role.CreationCQL) {
+	for _, query := range strutil.ParseArbitraryStringSlice(role.CreationCQL, ";") {
+		query = strings.TrimSpace(query)
+		if len(query) == 0 {
+			continue
+		}
+
 		err = session.Query(substQuery(query, map[string]string{
 			"username": username,
 			"password": password,
 		})).Exec()
 		if err != nil {
-			for _, query := range splitSQL(role.RollbackCQL) {
+			for _, query := range strutil.ParseArbitraryStringSlice(role.RollbackCQL, ";") {
+				query = strings.TrimSpace(query)
+				if len(query) == 0 {
+					continue
+				}
+
 				session.Query(substQuery(query, map[string]string{
 					"username": username,
 					"password": password,

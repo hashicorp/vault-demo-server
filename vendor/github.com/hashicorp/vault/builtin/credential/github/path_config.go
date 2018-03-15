@@ -1,6 +1,7 @@
 package github
 
 import (
+	"context"
 	"fmt"
 	"net/url"
 	"time"
@@ -36,12 +37,12 @@ API-compatible authentication server.`,
 
 		Callbacks: map[logical.Operation]framework.OperationFunc{
 			logical.UpdateOperation: b.pathConfigWrite,
+			logical.ReadOperation:   b.pathConfigRead,
 		},
 	}
 }
 
-func (b *backend) pathConfigWrite(
-	req *logical.Request, data *framework.FieldData) (*logical.Response, error) {
+func (b *backend) pathConfigWrite(ctx context.Context, req *logical.Request, data *framework.FieldData) (*logical.Response, error) {
 	organization := data.Get("organization").(string)
 	baseURL := data.Get("base_url").(string)
 	if len(baseURL) != 0 {
@@ -75,26 +76,50 @@ func (b *backend) pathConfigWrite(
 	}
 
 	entry, err := logical.StorageEntryJSON("config", config{
-		Org:     organization,
-		BaseURL: baseURL,
-		TTL:     ttl,
-		MaxTTL:  maxTTL,
+		Organization: organization,
+		BaseURL:      baseURL,
+		TTL:          ttl,
+		MaxTTL:       maxTTL,
 	})
 
 	if err != nil {
 		return nil, err
 	}
 
-	if err := req.Storage.Put(entry); err != nil {
+	if err := req.Storage.Put(ctx, entry); err != nil {
 		return nil, err
 	}
 
 	return nil, nil
 }
 
+func (b *backend) pathConfigRead(ctx context.Context, req *logical.Request, data *framework.FieldData) (*logical.Response, error) {
+	config, err := b.Config(ctx, req.Storage)
+	if err != nil {
+		return nil, err
+	}
+
+	if config == nil {
+		return nil, fmt.Errorf("configuration object not found")
+	}
+
+	config.TTL /= time.Second
+	config.MaxTTL /= time.Second
+
+	resp := &logical.Response{
+		Data: map[string]interface{}{
+			"organization": config.Organization,
+			"base_url":     config.BaseURL,
+			"ttl":          config.TTL,
+			"max_ttl":      config.MaxTTL,
+		},
+	}
+	return resp, nil
+}
+
 // Config returns the configuration for this backend.
-func (b *backend) Config(s logical.Storage) (*config, error) {
-	entry, err := s.Get("config")
+func (b *backend) Config(ctx context.Context, s logical.Storage) (*config, error) {
+	entry, err := s.Get(ctx, "config")
 	if err != nil {
 		return nil, err
 	}
@@ -110,8 +135,8 @@ func (b *backend) Config(s logical.Storage) (*config, error) {
 }
 
 type config struct {
-	Org     string        `json:"organization"`
-	BaseURL string        `json:"base_url"`
-	TTL     time.Duration `json:"ttl"`
-	MaxTTL  time.Duration `json:"max_ttl"`
+	Organization string        `json:"organization" structs:"organization" mapstructure:"organization"`
+	BaseURL      string        `json:"base_url" structs:"base_url" mapstructure:"base_url"`
+	TTL          time.Duration `json:"ttl" structs:"ttl" mapstructure:"ttl"`
+	MaxTTL       time.Duration `json:"max_ttl" structs:"max_ttl" mapstructure:"max_ttl"`
 }

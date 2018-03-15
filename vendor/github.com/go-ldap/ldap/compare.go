@@ -1,7 +1,3 @@
-// Copyright 2014 The Go Authors. All rights reserved.
-// Use of this source code is governed by a BSD-style
-// license that can be found in the LICENSE file.
-//
 // File contains Compare functionality
 //
 // https://tools.ietf.org/html/rfc4511
@@ -33,9 +29,8 @@ import (
 // Compare checks to see if the attribute of the dn matches value. Returns true if it does otherwise
 // false with any error that occurs if any.
 func (l *Conn) Compare(dn, attribute, value string) (bool, error) {
-	messageID := l.nextMessageID()
 	packet := ber.Encode(ber.ClassUniversal, ber.TypeConstructed, ber.TagSequence, nil, "LDAP Request")
-	packet.AppendChild(ber.NewInteger(ber.ClassUniversal, ber.TypePrimitive, ber.TagInteger, messageID, "MessageID"))
+	packet.AppendChild(ber.NewInteger(ber.ClassUniversal, ber.TypePrimitive, ber.TagInteger, l.nextMessageID(), "MessageID"))
 
 	request := ber.Encode(ber.ClassApplication, ber.TypeConstructed, ApplicationCompareRequest, nil, "Compare Request")
 	request.AppendChild(ber.NewString(ber.ClassUniversal, ber.TypePrimitive, ber.TagOctetString, dn, "DN"))
@@ -48,20 +43,21 @@ func (l *Conn) Compare(dn, attribute, value string) (bool, error) {
 
 	l.Debug.PrintPacket(packet)
 
-	channel, err := l.sendMessage(packet)
+	msgCtx, err := l.sendMessage(packet)
 	if err != nil {
 		return false, err
 	}
-	if channel == nil {
-		return false, NewError(ErrorNetwork, errors.New("ldap: could not send message"))
-	}
-	defer l.finishMessage(messageID)
+	defer l.finishMessage(msgCtx)
 
-	l.Debug.Printf("%d: waiting for response", messageID)
-	packet = <-channel
-	l.Debug.Printf("%d: got response %p", messageID, packet)
-	if packet == nil {
-		return false, NewError(ErrorNetwork, errors.New("ldap: could not retrieve message"))
+	l.Debug.Printf("%d: waiting for response", msgCtx.id)
+	packetResponse, ok := <-msgCtx.responses
+	if !ok {
+		return false, NewError(ErrorNetwork, errors.New("ldap: response channel closed"))
+	}
+	packet, err = packetResponse.ReadPacket()
+	l.Debug.Printf("%d: got response %p", msgCtx.id, packet)
+	if err != nil {
+		return false, err
 	}
 
 	if l.Debug {

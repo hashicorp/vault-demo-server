@@ -8,18 +8,23 @@ import (
 	"os"
 
 	"github.com/hashicorp/go-cleanhttp"
+	"github.com/hashicorp/go-multierror"
+	"github.com/hashicorp/go-rootcerts"
 	"github.com/hashicorp/hcl"
+	"github.com/hashicorp/hcl/hcl/ast"
 	"github.com/mitchellh/mapstructure"
 )
 
 const (
-	// Default path at which SSH backend will be mounted in Vault server
+	// SSHHelperDefaultMountPoint is the default path at which SSH backend will be
+	// mounted in the Vault server.
 	SSHHelperDefaultMountPoint = "ssh"
 
-	// Echo request message sent as OTP by the vault-ssh-helper
+	// VerifyEchoRequest is the echo request message sent as OTP by the helper.
 	VerifyEchoRequest = "verify-echo-request"
 
-	// Echo response message sent as a response to OTP matching echo request
+	// VerifyEchoResponse is the echo response message sent as a response to OTP
+	// matching echo request.
 	VerifyEchoResponse = "verify-echo-response"
 )
 
@@ -36,13 +41,16 @@ type SSHHelper struct {
 type SSHVerifyResponse struct {
 	// Usually empty. If the request OTP is echo request message, this will
 	// be set to the corresponding echo response message.
-	Message string `mapstructure:"message"`
+	Message string `json:"message" structs:"message" mapstructure:"message"`
 
 	// Username associated with the OTP
-	Username string `mapstructure:"username"`
+	Username string `json:"username" structs:"username" mapstructure:"username"`
 
 	// IP associated with the OTP
-	IP string `mapstructure:"ip"`
+	IP string `json:"ip" structs:"ip" mapstructure:"ip"`
+
+	// Name of the role against which the OTP was issued
+	RoleName string `json:"role_name" structs:"role_name" mapstructure:"role_name"`
 }
 
 // SSHHelperConfig is a structure which represents the entries from the vault-ssh-helper's configuration file.
@@ -52,21 +60,33 @@ type SSHHelperConfig struct {
 	CACert          string `hcl:"ca_cert"`
 	CAPath          string `hcl:"ca_path"`
 	AllowedCidrList string `hcl:"allowed_cidr_list"`
+	AllowedRoles    string `hcl:"allowed_roles"`
 	TLSSkipVerify   bool   `hcl:"tls_skip_verify"`
+	TLSServerName   string `hcl:"tls_server_name"`
 }
 
-// TLSClient returns a HTTP client that uses TLS verification (TLS 1.2) for a given
-// certificate pool.
+// SetTLSParameters sets the TLS parameters for this SSH agent.
 func (c *SSHHelperConfig) SetTLSParameters(clientConfig *Config, certPool *x509.CertPool) {
 	tlsConfig := &tls.Config{
 		InsecureSkipVerify: c.TLSSkipVerify,
 		MinVersion:         tls.VersionTLS12,
 		RootCAs:            certPool,
+		ServerName:         c.TLSServerName,
 	}
 
 	transport := cleanhttp.DefaultTransport()
 	transport.TLSClientConfig = tlsConfig
 	clientConfig.HttpClient.Transport = transport
+}
+
+// Returns true if any of the following conditions are true:
+//   * CA cert is configured
+//   * CA path is configured
+//   * configured to skip certificate verification
+//   * TLS server name is configured
+//
+func (c *SSHHelperConfig) shouldSetTLSParameters() bool {
+	return c.CACert != "" || c.CAPath != "" || c.TLSServerName != "" || c.TLSSkipVerify
 }
 
 // NewClient returns a new client for the configuration. This client will be used by the
@@ -81,18 +101,15 @@ func (c *SSHHelperConfig) NewClient() (*Client, error) {
 	clientConfig.Address = c.VaultAddr
 
 	// Check if certificates are provided via config file.
-	if c.CACert != "" || c.CAPath != "" || c.TLSSkipVerify {
-		var certPool *x509.CertPool
-		var err error
-		if c.CACert != "" {
-			certPool, err = LoadCACert(c.CACert)
-		} else if c.CAPath != "" {
-			certPool, err = LoadCAPath(c.CAPath)
+	if c.shouldSetTLSParameters() {
+		rootConfig := &rootcerts.Config{
+			CAFile: c.CACert,
+			CAPath: c.CAPath,
 		}
+		certPool, err := rootcerts.LoadCACerts(rootConfig)
 		if err != nil {
 			return nil, err
 		}
-
 		// Enable TLS on the HTTP client information
 		c.SetTLSParameters(clientConfig, certPool)
 	}
@@ -112,29 +129,50 @@ func (c *SSHHelperConfig) NewClient() (*Client, error) {
 // Vault address is a required parameter.
 // Mount point defaults to "ssh".
 func LoadSSHHelperConfig(path string) (*SSHHelperConfig, error) {
-	var config SSHHelperConfig
 	contents, err := ioutil.ReadFile(path)
-	if !os.IsNotExist(err) {
-		obj, err := hcl.Parse(string(contents))
-		if err != nil {
-			return nil, err
-		}
+	if err != nil && !os.IsNotExist(err) {
+		return nil, multierror.Prefix(err, "ssh_helper:")
+	}
+	return ParseSSHHelperConfig(string(contents))
+}
 
-		if err := hcl.DecodeObject(&config, obj); err != nil {
-			return nil, err
-		}
-	} else {
-		return nil, err
+// ParseSSHHelperConfig parses the given contents as a string for the SSHHelper
+// configuration.
+func ParseSSHHelperConfig(contents string) (*SSHHelperConfig, error) {
+	root, err := hcl.Parse(string(contents))
+	if err != nil {
+		return nil, fmt.Errorf("ssh_helper: error parsing config: %s", err)
 	}
 
-	if config.VaultAddr == "" {
-		return nil, fmt.Errorf("config missing vault_addr")
-	}
-	if config.SSHMountPoint == "" {
-		config.SSHMountPoint = SSHHelperDefaultMountPoint
+	list, ok := root.Node.(*ast.ObjectList)
+	if !ok {
+		return nil, fmt.Errorf("ssh_helper: error parsing config: file doesn't contain a root object")
 	}
 
-	return &config, nil
+	valid := []string{
+		"vault_addr",
+		"ssh_mount_point",
+		"ca_cert",
+		"ca_path",
+		"allowed_cidr_list",
+		"allowed_roles",
+		"tls_skip_verify",
+		"tls_server_name",
+	}
+	if err := checkHCLKeys(list, valid); err != nil {
+		return nil, multierror.Prefix(err, "ssh_helper:")
+	}
+
+	var c SSHHelperConfig
+	c.SSHMountPoint = SSHHelperDefaultMountPoint
+	if err := hcl.DecodeObject(&c, list); err != nil {
+		return nil, multierror.Prefix(err, "ssh_helper:")
+	}
+
+	if c.VaultAddr == "" {
+		return nil, fmt.Errorf("ssh_helper: missing config 'vault_addr'")
+	}
+	return &c, nil
 }
 
 // SSHHelper creates an SSHHelper object which can talk to Vault server with SSH backend
@@ -188,4 +226,32 @@ func (c *SSHHelper) Verify(otp string) (*SSHVerifyResponse, error) {
 		return nil, err
 	}
 	return &verifyResp, nil
+}
+
+func checkHCLKeys(node ast.Node, valid []string) error {
+	var list *ast.ObjectList
+	switch n := node.(type) {
+	case *ast.ObjectList:
+		list = n
+	case *ast.ObjectType:
+		list = n.List
+	default:
+		return fmt.Errorf("cannot check HCL keys of type %T", n)
+	}
+
+	validMap := make(map[string]struct{}, len(valid))
+	for _, v := range valid {
+		validMap[v] = struct{}{}
+	}
+
+	var result error
+	for _, item := range list.Items {
+		key := item.Keys[0].Token.Value().(string)
+		if _, ok := validMap[key]; !ok {
+			result = multierror.Append(result, fmt.Errorf(
+				"invalid key '%s' on line %d", key, item.Assign.Line))
+		}
+	}
+
+	return result
 }

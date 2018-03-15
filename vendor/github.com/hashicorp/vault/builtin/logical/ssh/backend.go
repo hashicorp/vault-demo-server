@@ -1,7 +1,9 @@
 package ssh
 
 import (
+	"context"
 	"strings"
+	"sync"
 
 	"github.com/hashicorp/vault/helper/salt"
 	"github.com/hashicorp/vault/logical"
@@ -10,37 +12,42 @@ import (
 
 type backend struct {
 	*framework.Backend
-	salt *salt.Salt
+	view      logical.Storage
+	salt      *salt.Salt
+	saltMutex sync.RWMutex
 }
 
-func Factory(conf *logical.BackendConfig) (logical.Backend, error) {
+func Factory(ctx context.Context, conf *logical.BackendConfig) (logical.Backend, error) {
 	b, err := Backend(conf)
 	if err != nil {
 		return nil, err
 	}
-	return b.Setup(conf)
-}
-
-func Backend(conf *logical.BackendConfig) (*framework.Backend, error) {
-	salt, err := salt.NewSalt(conf.StorageView, &salt.Config{
-		HashFunc: salt.SHA256Hash,
-	})
-	if err != nil {
+	if err := b.Setup(ctx, conf); err != nil {
 		return nil, err
 	}
+	return b, nil
+}
 
+func Backend(conf *logical.BackendConfig) (*backend, error) {
 	var b backend
-	b.salt = salt
+	b.view = conf.StorageView
 	b.Backend = &framework.Backend{
 		Help: strings.TrimSpace(backendHelp),
 
 		PathsSpecial: &logical.Paths{
-			Root: []string{
-				"config/*",
-				"keys/*",
-			},
 			Unauthenticated: []string{
 				"verify",
+				"public_key",
+			},
+
+			LocalStorage: []string{
+				"otp/",
+			},
+
+			SealWrapStorage: []string{
+				caPrivateKey,
+				caPrivateKeyStoragePath,
+				"keys/",
 			},
 		},
 
@@ -52,22 +59,60 @@ func Backend(conf *logical.BackendConfig) (*framework.Backend, error) {
 			pathCredsCreate(&b),
 			pathLookup(&b),
 			pathVerify(&b),
+			pathConfigCA(&b),
+			pathSign(&b),
+			pathFetchPublicKey(&b),
 		},
 
 		Secrets: []*framework.Secret{
 			secretDynamicKey(&b),
 			secretOTP(&b),
 		},
+
+		Invalidate:  b.invalidate,
+		BackendType: logical.TypeLogical,
 	}
-	return b.Backend, nil
+	return &b, nil
+}
+
+func (b *backend) Salt(ctx context.Context) (*salt.Salt, error) {
+	b.saltMutex.RLock()
+	if b.salt != nil {
+		defer b.saltMutex.RUnlock()
+		return b.salt, nil
+	}
+	b.saltMutex.RUnlock()
+	b.saltMutex.Lock()
+	defer b.saltMutex.Unlock()
+	if b.salt != nil {
+		return b.salt, nil
+	}
+	salt, err := salt.NewSalt(ctx, b.view, &salt.Config{
+		HashFunc: salt.SHA256Hash,
+		Location: salt.DefaultLocation,
+	})
+	if err != nil {
+		return nil, err
+	}
+	b.salt = salt
+	return salt, nil
+}
+
+func (b *backend) invalidate(_ context.Context, key string) {
+	switch key {
+	case salt.DefaultLocation:
+		b.saltMutex.Lock()
+		defer b.saltMutex.Unlock()
+		b.salt = nil
+	}
 }
 
 const backendHelp = `
 The SSH backend generates credentials allowing clients to establish SSH
 connections to remote hosts.
 
-There are two variants of the backend, which generate different types of
-credentials: dynamic keys and One-Time Passwords (OTPs). The desired behavior
+There are three variants of the backend, which generate different types of
+credentials: dynamic keys, One-Time Passwords (OTPs) and certificate authority. The desired behavior
 is role-specific and chosen at role creation time with the 'key_type'
 parameter.
 

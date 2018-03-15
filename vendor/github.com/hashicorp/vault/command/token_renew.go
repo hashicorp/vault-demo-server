@@ -2,97 +2,135 @@ package command
 
 import (
 	"fmt"
-	"strconv"
 	"strings"
+	"time"
 
 	"github.com/hashicorp/vault/api"
+	"github.com/mitchellh/cli"
+	"github.com/posener/complete"
 )
 
-// TokenRenewCommand is a Command that mounts a new mount.
+var _ cli.Command = (*TokenRenewCommand)(nil)
+var _ cli.CommandAutocomplete = (*TokenRenewCommand)(nil)
+
 type TokenRenewCommand struct {
-	Meta
-}
+	*BaseCommand
 
-func (c *TokenRenewCommand) Run(args []string) int {
-	var format string
-	flags := c.Meta.FlagSet("token-renew", FlagSetDefault)
-	flags.StringVar(&format, "format", "table", "")
-	flags.Usage = func() { c.Ui.Error(c.Help()) }
-	if err := flags.Parse(args); err != nil {
-		return 1
-	}
-
-	args = flags.Args()
-	if len(args) < 1 {
-		flags.Usage()
-		c.Ui.Error(fmt.Sprintf(
-			"\ntoken-renew expects at least one argument"))
-		return 1
-	}
-
-	var increment int
-	token := args[0]
-	if len(args) > 1 {
-		value, err := strconv.ParseInt(args[1], 10, 0)
-		if err != nil {
-			c.Ui.Error(fmt.Sprintf("Invalid increment: %s", err))
-			return 1
-		}
-
-		increment = int(value)
-	}
-
-	client, err := c.Client()
-	if err != nil {
-		c.Ui.Error(fmt.Sprintf(
-			"Error initializing client: %s", err))
-		return 2
-	}
-
-	// If the given token is the same as the client's, use renew-self instead
-	// as this is far more likely to be allowed via policy
-	var secret *api.Secret
-	if client.Token() == token {
-		secret, err = client.Auth().Token().RenewSelf(increment)
-	} else {
-		secret, err = client.Auth().Token().Renew(token, increment)
-	}
-	if err != nil {
-		c.Ui.Error(fmt.Sprintf(
-			"Error renewing token: %s", err))
-		return 1
-	}
-
-	return OutputSecret(c.Ui, format, secret)
+	flagIncrement time.Duration
 }
 
 func (c *TokenRenewCommand) Synopsis() string {
-	return "Renew an auth token if there is an associated lease"
+	return "Renew a token lease"
 }
 
 func (c *TokenRenewCommand) Help() string {
 	helpText := `
-Usage: vault token-renew [options] token [increment]
+Usage: vault token renew [options] [TOKEN]
 
-  Renew an auth token, extending the amount of time it can be used.
-  Token is renewable only if there is a lease associated with it.
+  Renews a token's lease, extending the amount of time it can be used. If a
+  TOKEN is not provided, the locally authenticated token is used. Lease renewal
+  will fail if the token is not renewable, the token has already been revoked,
+  or if the token has already reached its maximum TTL.
 
-  This command is similar to "renew", but "renew" is only for lease IDs.
-  This command is only for tokens.
+  Renew a token (this uses the /auth/token/renew endpoint and permission):
 
-  An optional increment can be given to request a certain number of
-  seconds to increment the lease. This request is advisory; Vault may not
-  adhere to it at all.
+      $ vault token renew 96ddf4bc-d217-f3ba-f9bd-017055595017
 
-General Options:
+  Renew the currently authenticated token (this uses the /auth/token/renew-self
+  endpoint and permission):
 
-  ` + generalOptionsUsage() + `
+      $ vault token renew
 
-Token Renew Options:
+  Renew a token requesting a specific increment value:
 
-  -format=table           The format for output. By default it is a whitespace-
-                          delimited table. This can also be json or yaml.
+      $ vault token renew -increment=30m 96ddf4bc-d217-f3ba-f9bd-017055595017
 
-`
+  For a full list of examples, please see the documentation.
+
+` + c.Flags().Help()
+
 	return strings.TrimSpace(helpText)
+}
+
+func (c *TokenRenewCommand) Flags() *FlagSets {
+	set := c.flagSet(FlagSetHTTP | FlagSetOutputFormat)
+	f := set.NewFlagSet("Command Options")
+
+	f.DurationVar(&DurationVar{
+		Name:       "increment",
+		Aliases:    []string{"i"},
+		Target:     &c.flagIncrement,
+		Default:    0,
+		EnvVar:     "",
+		Completion: complete.PredictAnything,
+		Usage: "Request a specific increment for renewal. Vault is not required " +
+			"to honor this request. If not supplied, Vault will use the default " +
+			"TTL. This is specified as a numeric string with suffix like \"30s\" " +
+			"or \"5m\".",
+	})
+
+	return set
+}
+
+func (c *TokenRenewCommand) AutocompleteArgs() complete.Predictor {
+	return c.PredictVaultFiles()
+}
+
+func (c *TokenRenewCommand) AutocompleteFlags() complete.Flags {
+	return c.Flags().Completions()
+}
+
+func (c *TokenRenewCommand) Run(args []string) int {
+	f := c.Flags()
+
+	if err := f.Parse(args); err != nil {
+		c.UI.Error(err.Error())
+		return 1
+	}
+
+	token := ""
+	increment := c.flagIncrement
+
+	args = f.Args()
+	switch len(args) {
+	case 0:
+		// Use the local token
+	case 1:
+		token = strings.TrimSpace(args[0])
+	case 2:
+		// TODO: remove in 0.9.0 - backwards compat
+		c.UI.Warn("Specifying increment as a second argument is deprecated. " +
+			"Please use -increment instead.")
+
+		token = strings.TrimSpace(args[0])
+		parsed, err := time.ParseDuration(appendDurationSuffix(args[1]))
+		if err != nil {
+			c.UI.Error(fmt.Sprintf("Invalid increment: %s", err))
+			return 1
+		}
+		increment = parsed
+	default:
+		c.UI.Error(fmt.Sprintf("Too many arguments (expected 1, got %d)", len(args)))
+		return 1
+	}
+
+	client, err := c.Client()
+	if err != nil {
+		c.UI.Error(err.Error())
+		return 2
+	}
+
+	var secret *api.Secret
+	inc := truncateToSeconds(increment)
+	if token == "" {
+		secret, err = client.Auth().Token().RenewSelf(inc)
+	} else {
+		secret, err = client.Auth().Token().Renew(token, inc)
+	}
+	if err != nil {
+		c.UI.Error(fmt.Sprintf("Error renewing token: %s", err))
+		return 2
+	}
+
+	return OutputSecret(c.UI, secret)
 }

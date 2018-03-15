@@ -1,10 +1,12 @@
 package vault
 
 import (
-	"log"
+	"context"
 	"strings"
 	"sync"
 	"time"
+
+	log "github.com/mgutz/logxi/v1"
 
 	"github.com/armon/go-metrics"
 	"github.com/hashicorp/vault/logical"
@@ -28,24 +30,25 @@ const (
 // on every mounted logical backend. It ensures that only one rollback operation
 // is in-flight at any given time within a single seal/unseal phase.
 type RollbackManager struct {
-	logger *log.Logger
+	logger log.Logger
 
-	// This gives the current mount table, plus a RWMutex that is
-	// locked for reading. It is up to the caller to RUnlock it
-	// when done with the mount table
-	mounts func() []*MountEntry
+	// This gives the current mount table of both logical and credential backends,
+	// plus a RWMutex that is locked for reading. It is up to the caller to RUnlock
+	// it when done with the mount table.
+	backends func() []*MountEntry
 
 	router *Router
 	period time.Duration
 
 	inflightAll  sync.WaitGroup
 	inflight     map[string]*rollbackState
-	inflightLock sync.Mutex
+	inflightLock sync.RWMutex
 
 	doneCh       chan struct{}
 	shutdown     bool
 	shutdownCh   chan struct{}
 	shutdownLock sync.Mutex
+	quitContext  context.Context
 }
 
 // rollbackState is used to track the state of a single rollback attempt
@@ -55,15 +58,16 @@ type rollbackState struct {
 }
 
 // NewRollbackManager is used to create a new rollback manager
-func NewRollbackManager(logger *log.Logger, mounts func() []*MountEntry, router *Router) *RollbackManager {
+func NewRollbackManager(logger log.Logger, backendsFunc func() []*MountEntry, router *Router, ctx context.Context) *RollbackManager {
 	r := &RollbackManager{
-		logger:     logger,
-		mounts:     mounts,
-		router:     router,
-		period:     rollbackPeriod,
-		inflight:   make(map[string]*rollbackState),
-		doneCh:     make(chan struct{}),
-		shutdownCh: make(chan struct{}),
+		logger:      logger,
+		backends:    backendsFunc,
+		router:      router,
+		period:      rollbackPeriod,
+		inflight:    make(map[string]*rollbackState),
+		doneCh:      make(chan struct{}),
+		shutdownCh:  make(chan struct{}),
+		quitContext: ctx,
 	}
 	return r
 }
@@ -88,7 +92,7 @@ func (m *RollbackManager) Stop() {
 
 // run is a long running routine to periodically invoke rollback
 func (m *RollbackManager) run() {
-	m.logger.Printf("[INFO] rollback: starting rollback manager")
+	m.logger.Info("rollback: starting rollback manager")
 	tick := time.NewTicker(m.period)
 	defer tick.Stop()
 	defer close(m.doneCh)
@@ -98,7 +102,7 @@ func (m *RollbackManager) run() {
 			m.triggerRollbacks()
 
 		case <-m.shutdownCh:
-			m.logger.Printf("[INFO] rollback: stopping rollback manager")
+			m.logger.Info("rollback: stopping rollback manager")
 			return
 		}
 	}
@@ -106,14 +110,26 @@ func (m *RollbackManager) run() {
 
 // triggerRollbacks is used to trigger the rollbacks across all the backends
 func (m *RollbackManager) triggerRollbacks() {
-	m.inflightLock.Lock()
-	defer m.inflightLock.Unlock()
 
-	mounts := m.mounts()
+	backends := m.backends()
 
-	for _, e := range mounts {
-		if _, ok := m.inflight[e.Path]; !ok {
-			m.startRollback(e.Path)
+	for _, e := range backends {
+		path := e.Path
+		if e.Table == credentialTableType {
+			path = credentialRoutePrefix + path
+		}
+
+		// When the mount is filtered, the backend will be nil
+		backend := m.router.MatchingBackend(path)
+		if backend == nil {
+			continue
+		}
+
+		m.inflightLock.RLock()
+		_, ok := m.inflight[path]
+		m.inflightLock.RUnlock()
+		if !ok {
+			m.startRollback(path)
 		}
 	}
 }
@@ -124,15 +140,19 @@ func (m *RollbackManager) startRollback(path string) *rollbackState {
 	rs := &rollbackState{}
 	rs.Add(1)
 	m.inflightAll.Add(1)
+	m.inflightLock.Lock()
 	m.inflight[path] = rs
-	go m.attemptRollback(path, rs)
+	m.inflightLock.Unlock()
+	go m.attemptRollback(m.quitContext, path, rs)
 	return rs
 }
 
 // attemptRollback invokes a RollbackOperation for the given path
-func (m *RollbackManager) attemptRollback(path string, rs *rollbackState) (err error) {
+func (m *RollbackManager) attemptRollback(ctx context.Context, path string, rs *rollbackState) (err error) {
 	defer metrics.MeasureSince([]string{"rollback", "attempt", strings.Replace(path, "/", "-", -1)}, time.Now())
-	m.logger.Printf("[DEBUG] rollback: attempting rollback on %s", path)
+	if m.logger.IsTrace() {
+		m.logger.Trace("rollback: attempting rollback", "path", path)
+	}
 
 	defer func() {
 		rs.lastError = err
@@ -148,16 +168,19 @@ func (m *RollbackManager) attemptRollback(path string, rs *rollbackState) (err e
 		Operation: logical.RollbackOperation,
 		Path:      path,
 	}
-	_, err = m.router.Route(req)
+	_, err = m.router.Route(ctx, req)
 
 	// If the error is an unsupported operation, then it doesn't
 	// matter, the backend doesn't support it.
 	if err == logical.ErrUnsupportedOperation {
 		err = nil
 	}
+	// If we failed due to read-only storage, we can't do anything; ignore
+	if err != nil && strings.Contains(err.Error(), logical.ErrReadOnly.Error()) {
+		err = nil
+	}
 	if err != nil {
-		m.logger.Printf("[ERR] rollback: error rolling back %s: %s",
-			path, err)
+		m.logger.Error("rollback: error rolling back", "path", path, "error", err)
 	}
 	return
 }
@@ -166,12 +189,12 @@ func (m *RollbackManager) attemptRollback(path string, rs *rollbackState) (err e
 // or to join an existing rollback operation if in flight.
 func (m *RollbackManager) Rollback(path string) error {
 	// Check for an existing attempt and start one if none
-	m.inflightLock.Lock()
+	m.inflightLock.RLock()
 	rs, ok := m.inflight[path]
+	m.inflightLock.RUnlock()
 	if !ok {
 		rs = m.startRollback(path)
 	}
-	m.inflightLock.Unlock()
 
 	// Wait for the attempt to finish
 	rs.Wait()
@@ -184,16 +207,29 @@ func (m *RollbackManager) Rollback(path string) error {
 
 // startRollback is used to start the rollback manager after unsealing
 func (c *Core) startRollback() error {
-	mountsFunc := func() []*MountEntry {
+	backendsFunc := func() []*MountEntry {
 		ret := []*MountEntry{}
 		c.mountsLock.RLock()
 		defer c.mountsLock.RUnlock()
-		for _, entry := range c.mounts.Entries {
-			ret = append(ret, entry)
+		// During teardown/setup after a leader change or unseal there could be
+		// something racy here so make sure the table isn't nil
+		if c.mounts != nil {
+			for _, entry := range c.mounts.Entries {
+				ret = append(ret, entry)
+			}
+		}
+		c.authLock.RLock()
+		defer c.authLock.RUnlock()
+		// During teardown/setup after a leader change or unseal there could be
+		// something racy here so make sure the table isn't nil
+		if c.auth != nil {
+			for _, entry := range c.auth.Entries {
+				ret = append(ret, entry)
+			}
 		}
 		return ret
 	}
-	c.rollback = NewRollbackManager(c.logger, mountsFunc, c.router)
+	c.rollback = NewRollbackManager(c.logger, backendsFunc, c.router, c.activeContext)
 	c.rollback.Start()
 	return nil
 }

@@ -1,20 +1,24 @@
-package file
+package syslog
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"strconv"
+	"sync"
 
 	"github.com/hashicorp/go-syslog"
 	"github.com/hashicorp/vault/audit"
 	"github.com/hashicorp/vault/helper/salt"
 	"github.com/hashicorp/vault/logical"
-	"github.com/mitchellh/copystructure"
 )
 
-func Factory(conf *audit.BackendConfig) (audit.Backend, error) {
-	if conf.Salt == nil {
-		return nil, fmt.Errorf("Nil salt passed in")
+func Factory(ctx context.Context, conf *audit.BackendConfig) (audit.Backend, error) {
+	if conf.SaltConfig == nil {
+		return nil, fmt.Errorf("nil salt config")
+	}
+	if conf.SaltView == nil {
+		return nil, fmt.Errorf("nil salt view")
 	}
 
 	// Get facility or default to AUTH
@@ -27,6 +31,26 @@ func Factory(conf *audit.BackendConfig) (audit.Backend, error) {
 	tag, ok := conf.Config["tag"]
 	if !ok {
 		tag = "vault"
+	}
+
+	format, ok := conf.Config["format"]
+	if !ok {
+		format = "json"
+	}
+	switch format {
+	case "json", "jsonx":
+	default:
+		return nil, fmt.Errorf("unknown format type %s", format)
+	}
+
+	// Check if hashing of accessor is disabled
+	hmacAccessor := true
+	if hmacAccessorRaw, ok := conf.Config["hmac_accessor"]; ok {
+		value, err := strconv.ParseBool(hmacAccessorRaw)
+		if err != nil {
+			return nil, err
+		}
+		hmacAccessor = value
 	}
 
 	// Check if raw logging is enabled
@@ -46,63 +70,57 @@ func Factory(conf *audit.BackendConfig) (audit.Backend, error) {
 	}
 
 	b := &Backend{
-		logger: logger,
-		logRaw: logRaw,
-		salt:   conf.Salt,
+		logger:     logger,
+		saltConfig: conf.SaltConfig,
+		saltView:   conf.SaltView,
+		formatConfig: audit.FormatterConfig{
+			Raw:          logRaw,
+			HMACAccessor: hmacAccessor,
+		},
 	}
+
+	switch format {
+	case "json":
+		b.formatter.AuditFormatWriter = &audit.JSONFormatWriter{
+			Prefix:   conf.Config["prefix"],
+			SaltFunc: b.Salt,
+		}
+	case "jsonx":
+		b.formatter.AuditFormatWriter = &audit.JSONxFormatWriter{
+			Prefix:   conf.Config["prefix"],
+			SaltFunc: b.Salt,
+		}
+	}
+
 	return b, nil
 }
 
 // Backend is the audit backend for the syslog-based audit store.
 type Backend struct {
 	logger gsyslog.Syslogger
-	logRaw bool
-	salt   *salt.Salt
+
+	formatter    audit.AuditFormatter
+	formatConfig audit.FormatterConfig
+
+	saltMutex  sync.RWMutex
+	salt       *salt.Salt
+	saltConfig *salt.Config
+	saltView   logical.Storage
 }
 
-func (b *Backend) GetHash(data string) string {
-	return audit.HashString(b.salt, data)
-}
+var _ audit.Backend = (*Backend)(nil)
 
-func (b *Backend) LogRequest(auth *logical.Auth, req *logical.Request, outerErr error) error {
-	if !b.logRaw {
-		// Before we copy the structure we must nil out some data
-		// otherwise we will cause reflection to panic and die
-		if req.Connection != nil && req.Connection.ConnState != nil {
-			origReq := req
-			origState := req.Connection.ConnState
-			req.Connection.ConnState = nil
-			defer func() {
-				origReq.Connection.ConnState = origState
-			}()
-		}
-
-		// Copy the structures
-		cp, err := copystructure.Copy(auth)
-		if err != nil {
-			return err
-		}
-		auth = cp.(*logical.Auth)
-
-		cp, err = copystructure.Copy(req)
-		if err != nil {
-			return err
-		}
-		req = cp.(*logical.Request)
-
-		// Hash any sensitive information
-		if err := audit.Hash(b.salt, auth); err != nil {
-			return err
-		}
-		if err := audit.Hash(b.salt, req); err != nil {
-			return err
-		}
+func (b *Backend) GetHash(ctx context.Context, data string) (string, error) {
+	salt, err := b.Salt(ctx)
+	if err != nil {
+		return "", err
 	}
+	return audit.HashString(salt, data), nil
+}
 
-	// Encode the entry as JSON
+func (b *Backend) LogRequest(ctx context.Context, in *audit.LogInput) error {
 	var buf bytes.Buffer
-	var format audit.FormatJSON
-	if err := format.FormatRequest(&buf, auth, req, outerErr); err != nil {
+	if err := b.formatter.FormatRequest(ctx, &buf, b.formatConfig, in); err != nil {
 		return err
 	}
 
@@ -111,59 +129,43 @@ func (b *Backend) LogRequest(auth *logical.Auth, req *logical.Request, outerErr 
 	return err
 }
 
-func (b *Backend) LogResponse(auth *logical.Auth, req *logical.Request,
-	resp *logical.Response, err error) error {
-	if !b.logRaw {
-		// Before we copy the structure we must nil out some data
-		// otherwise we will cause reflection to panic and die
-		if req.Connection != nil && req.Connection.ConnState != nil {
-			origReq := req
-			origState := req.Connection.ConnState
-			req.Connection.ConnState = nil
-			defer func() {
-				origReq.Connection.ConnState = origState
-			}()
-		}
-
-		// Copy the structure
-		cp, err := copystructure.Copy(auth)
-		if err != nil {
-			return err
-		}
-		auth = cp.(*logical.Auth)
-
-		cp, err = copystructure.Copy(req)
-		if err != nil {
-			return err
-		}
-		req = cp.(*logical.Request)
-
-		cp, err = copystructure.Copy(resp)
-		if err != nil {
-			return err
-		}
-		resp = cp.(*logical.Response)
-
-		// Hash any sensitive information
-		if err := audit.Hash(b.salt, auth); err != nil {
-			return err
-		}
-		if err := audit.Hash(b.salt, req); err != nil {
-			return err
-		}
-		if err := audit.Hash(b.salt, resp); err != nil {
-			return err
-		}
-	}
-
-	// Encode the entry as JSON
+func (b *Backend) LogResponse(ctx context.Context, in *audit.LogInput) error {
 	var buf bytes.Buffer
-	var format audit.FormatJSON
-	if err := format.FormatResponse(&buf, auth, req, resp, err); err != nil {
+	if err := b.formatter.FormatResponse(ctx, &buf, b.formatConfig, in); err != nil {
 		return err
 	}
 
-	// Write otu to syslog
-	_, err = b.logger.Write(buf.Bytes())
+	// Write out to syslog
+	_, err := b.logger.Write(buf.Bytes())
 	return err
+}
+
+func (b *Backend) Reload(_ context.Context) error {
+	return nil
+}
+
+func (b *Backend) Salt(ctx context.Context) (*salt.Salt, error) {
+	b.saltMutex.RLock()
+	if b.salt != nil {
+		defer b.saltMutex.RUnlock()
+		return b.salt, nil
+	}
+	b.saltMutex.RUnlock()
+	b.saltMutex.Lock()
+	defer b.saltMutex.Unlock()
+	if b.salt != nil {
+		return b.salt, nil
+	}
+	salt, err := salt.NewSalt(ctx, b.saltView, b.saltConfig)
+	if err != nil {
+		return nil, err
+	}
+	b.salt = salt
+	return salt, nil
+}
+
+func (b *Backend) Invalidate(_ context.Context) {
+	b.saltMutex.Lock()
+	defer b.saltMutex.Unlock()
+	b.salt = nil
 }

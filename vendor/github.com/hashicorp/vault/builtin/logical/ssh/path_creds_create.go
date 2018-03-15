@@ -1,6 +1,7 @@
 package ssh
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"strings"
@@ -11,8 +12,9 @@ import (
 )
 
 type sshOTP struct {
-	Username string `json:"username"`
-	IP       string `json:"ip"`
+	Username string `json:"username" structs:"username" mapstructure:"username"`
+	IP       string `json:"ip" structs:"ip" mapstructure:"ip"`
+	RoleName string `json:"role_name" structs:"role_name" mapstructure:"role_name"`
 }
 
 func pathCredsCreate(b *backend) *framework.Path {
@@ -40,8 +42,7 @@ func pathCredsCreate(b *backend) *framework.Path {
 	}
 }
 
-func (b *backend) pathCredsCreateWrite(
-	req *logical.Request, d *framework.FieldData) (*logical.Response, error) {
+func (b *backend) pathCredsCreateWrite(ctx context.Context, req *logical.Request, d *framework.FieldData) (*logical.Response, error) {
 	roleName := d.Get("role").(string)
 	if roleName == "" {
 		return logical.ErrorResponse("Missing role"), nil
@@ -52,12 +53,12 @@ func (b *backend) pathCredsCreateWrite(
 		return logical.ErrorResponse("Missing ip"), nil
 	}
 
-	role, err := b.getRole(req.Storage, roleName)
+	role, err := b.getRole(ctx, req.Storage, roleName)
 	if err != nil {
-		return nil, fmt.Errorf("error retrieving role: %s", err)
+		return nil, fmt.Errorf("error retrieving role: %v", err)
 	}
 	if role == nil {
-		return logical.ErrorResponse(fmt.Sprintf("Role '%s' not found", roleName)), nil
+		return logical.ErrorResponse(fmt.Sprintf("Role %q not found", roleName)), nil
 	}
 
 	// username is an optional parameter.
@@ -79,22 +80,24 @@ func (b *backend) pathCredsCreateWrite(
 		// is the default username in the role. If neither is true, then
 		// that username is not allowed to generate a credential.
 		if err != nil && username != role.DefaultUser {
-			return logical.ErrorResponse("Username is not present is allowed users list."), nil
+			return logical.ErrorResponse("Username is not present is allowed users list"), nil
 		}
+	} else if username != role.DefaultUser {
+		return logical.ErrorResponse("Username has to be either in allowed users list or has to be a default username"), nil
 	}
 
 	// Validate the IP address
 	ipAddr := net.ParseIP(ipRaw)
 	if ipAddr == nil {
-		return logical.ErrorResponse(fmt.Sprintf("Invalid IP '%s'", ipRaw)), nil
+		return logical.ErrorResponse(fmt.Sprintf("Invalid IP %q", ipRaw)), nil
 	}
 
 	// Check if the IP belongs to the registered list of CIDR blocks under the role
 	ip := ipAddr.String()
 
-	zeroAddressEntry, err := b.getZeroAddressRoles(req.Storage)
+	zeroAddressEntry, err := b.getZeroAddressRoles(ctx, req.Storage)
 	if err != nil {
-		return nil, fmt.Errorf("error retrieving zero-address roles: %s", err)
+		return nil, fmt.Errorf("error retrieving zero-address roles: %v", err)
 	}
 	var zeroAddressRoles []string
 	if zeroAddressEntry != nil {
@@ -103,13 +106,17 @@ func (b *backend) pathCredsCreateWrite(
 
 	err = validateIP(ip, roleName, role.CIDRList, role.ExcludeCIDRList, zeroAddressRoles)
 	if err != nil {
-		return logical.ErrorResponse(fmt.Sprintf("Error validating IP: %s", err)), nil
+		return logical.ErrorResponse(fmt.Sprintf("Error validating IP: %v", err)), nil
 	}
 
 	var result *logical.Response
 	if role.KeyType == KeyTypeOTP {
 		// Generate an OTP
-		otp, err := b.GenerateOTPCredential(req, username, ip)
+		otp, err := b.GenerateOTPCredential(ctx, req, &sshOTP{
+			Username: username,
+			IP:       ip,
+			RoleName: roleName,
+		})
 		if err != nil {
 			return nil, err
 		}
@@ -130,7 +137,7 @@ func (b *backend) pathCredsCreateWrite(
 	} else if role.KeyType == KeyTypeDynamic {
 		// Generate an RSA key pair. This also installs the newly generated
 		// public key in the remote host.
-		dynamicPublicKey, dynamicPrivateKey, err := b.GenerateDynamicCredential(req, role, username, ip)
+		dynamicPublicKey, dynamicPrivateKey, err := b.GenerateDynamicCredential(ctx, req, role, username, ip)
 		if err != nil {
 			return nil, err
 		}
@@ -160,26 +167,26 @@ func (b *backend) pathCredsCreateWrite(
 }
 
 // Generates a RSA key pair and installs it in the remote target
-func (b *backend) GenerateDynamicCredential(req *logical.Request, role *sshRole, username, ip string) (string, string, error) {
+func (b *backend) GenerateDynamicCredential(ctx context.Context, req *logical.Request, role *sshRole, username, ip string) (string, string, error) {
 	// Fetch the host key to be used for dynamic key installation
-	keyEntry, err := req.Storage.Get(fmt.Sprintf("keys/%s", role.KeyName))
+	keyEntry, err := req.Storage.Get(ctx, fmt.Sprintf("keys/%s", role.KeyName))
 	if err != nil {
-		return "", "", fmt.Errorf("key '%s' not found. err:%s", role.KeyName, err)
+		return "", "", fmt.Errorf("key %q not found. err: %v", role.KeyName, err)
 	}
 
 	if keyEntry == nil {
-		return "", "", fmt.Errorf("key '%s' not found", role.KeyName)
+		return "", "", fmt.Errorf("key %q not found", role.KeyName)
 	}
 
 	var hostKey sshHostKey
 	if err := keyEntry.DecodeJSON(&hostKey); err != nil {
-		return "", "", fmt.Errorf("error reading the host key: %s", err)
+		return "", "", fmt.Errorf("error reading the host key: %v", err)
 	}
 
 	// Generate a new RSA key pair with the given key length.
 	dynamicPublicKey, dynamicPrivateKey, err := generateRSAKeys(role.KeyBits)
 	if err != nil {
-		return "", "", fmt.Errorf("error generating key: %s", err)
+		return "", "", fmt.Errorf("error generating key: %v", err)
 	}
 
 	if len(role.KeyOptionSpecs) != 0 {
@@ -187,56 +194,58 @@ func (b *backend) GenerateDynamicCredential(req *logical.Request, role *sshRole,
 	}
 
 	// Add the public key to authorized_keys file in target machine
-	err = b.installPublicKeyInTarget(role.AdminUser, username, ip, role.Port, hostKey.Key, dynamicPublicKey, role.InstallScript, true)
+	err = b.installPublicKeyInTarget(ctx, role.AdminUser, username, ip, role.Port, hostKey.Key, dynamicPublicKey, role.InstallScript, true)
 	if err != nil {
-		return "", "", fmt.Errorf("error adding public key to authorized_keys file in target")
+		return "", "", fmt.Errorf("failed to add public key to authorized_keys file in target: %v", err)
 	}
 	return dynamicPublicKey, dynamicPrivateKey, nil
 }
 
 // Generates a UUID OTP and its salted value based on the salt of the backend.
-func (b *backend) GenerateSaltedOTP() (string, string, error) {
+func (b *backend) GenerateSaltedOTP(ctx context.Context) (string, string, error) {
 	str, err := uuid.GenerateUUID()
 	if err != nil {
 		return "", "", err
 	}
-	return str, b.salt.SaltID(str), nil
+	salt, err := b.Salt(ctx)
+	if err != nil {
+		return "", "", err
+	}
+
+	return str, salt.SaltID(str), nil
 }
 
 // Generates an UUID OTP and creates an entry for the same in storage backend with its salted string.
-func (b *backend) GenerateOTPCredential(req *logical.Request, username, ip string) (string, error) {
-	otp, otpSalted, err := b.GenerateSaltedOTP()
+func (b *backend) GenerateOTPCredential(ctx context.Context, req *logical.Request, sshOTPEntry *sshOTP) (string, error) {
+	otp, otpSalted, err := b.GenerateSaltedOTP(ctx)
 	if err != nil {
 		return "", err
 	}
 
 	// Check if there is an entry already created for the newly generated OTP.
-	entry, err := b.getOTP(req.Storage, otpSalted)
+	entry, err := b.getOTP(ctx, req.Storage, otpSalted)
 
 	// If entry already exists for the OTP, make sure that new OTP is not
 	// replacing an existing one by recreating new ones until an unused
 	// OTP is generated. It is very unlikely that this is the case and this
 	// code is just for safety.
 	for err == nil && entry != nil {
-		otp, otpSalted, err = b.GenerateSaltedOTP()
+		otp, otpSalted, err = b.GenerateSaltedOTP(ctx)
 		if err != nil {
 			return "", err
 		}
-		entry, err = b.getOTP(req.Storage, otpSalted)
+		entry, err = b.getOTP(ctx, req.Storage, otpSalted)
 		if err != nil {
 			return "", err
 		}
 	}
 
 	// Store an entry for the salt of OTP.
-	newEntry, err := logical.StorageEntryJSON("otp/"+otpSalted, sshOTP{
-		Username: username,
-		IP:       ip,
-	})
+	newEntry, err := logical.StorageEntryJSON("otp/"+otpSalted, sshOTPEntry)
 	if err != nil {
 		return "", err
 	}
-	if err := req.Storage.Put(newEntry); err != nil {
+	if err := req.Storage.Put(ctx, newEntry); err != nil {
 		return "", err
 	}
 	return otp, nil
@@ -285,12 +294,22 @@ func validateIP(ip, roleName, cidrList, excludeCidrList string, zeroAddressRoles
 // Checks if the username supplied by the user is present in the list of
 // allowed users registered which creation of role.
 func validateUsername(username, allowedUsers string) error {
+	if allowedUsers == "" {
+		return fmt.Errorf("username not in allowed users list")
+	}
+
+	// Role was explicitly configured to allow any username.
+	if allowedUsers == "*" {
+		return nil
+	}
+
 	userList := strings.Split(allowedUsers, ",")
 	for _, user := range userList {
-		if user == username {
+		if strings.TrimSpace(user) == username {
 			return nil
 		}
 	}
+
 	return fmt.Errorf("username not in allowed users list")
 }
 

@@ -9,20 +9,20 @@ import (
 	"crypto/rsa"
 	"crypto/sha1"
 	"crypto/x509"
-	"encoding/json"
 	"encoding/pem"
 	"fmt"
 	"math/big"
 	"strconv"
 	"strings"
 
+	"github.com/hashicorp/vault/helper/errutil"
+	"github.com/hashicorp/vault/helper/jsonutil"
 	"github.com/mitchellh/mapstructure"
 )
 
-// GetOctalFormatted returns the byte buffer formatted in octal with
+// GetHexFormatted returns the byte buffer formatted in hex with
 // the specified separator between bytes.
-// FIXME: where did I originally copy this code from? This ain't octal, it's hex.
-func GetOctalFormatted(buf []byte, sep string) string {
+func GetHexFormatted(buf []byte, sep string) string {
 	var ret bytes.Buffer
 	for _, cur := range buf {
 		if ret.Len() > 0 {
@@ -33,6 +33,7 @@ func GetOctalFormatted(buf []byte, sep string) string {
 	return ret.String()
 }
 
+// ParseHexFormatted returns the raw bytes from a formatted hex string
 func ParseHexFormatted(in, sep string) []byte {
 	var ret bytes.Buffer
 	var err error
@@ -41,9 +42,8 @@ func ParseHexFormatted(in, sep string) []byte {
 	for _, inByte := range inBytes {
 		if inBits, err = strconv.ParseInt(inByte, 16, 8); err != nil {
 			return nil
-		} else {
-			ret.WriteByte(byte(inBits))
 		}
+		ret.WriteByte(byte(inBits))
 	}
 	return ret.Bytes()
 }
@@ -52,12 +52,12 @@ func ParseHexFormatted(in, sep string) []byte {
 // of the marshaled public key
 func GetSubjKeyID(privateKey crypto.Signer) ([]byte, error) {
 	if privateKey == nil {
-		return nil, InternalError{"passed-in private key is nil"}
+		return nil, errutil.InternalError{Err: "passed-in private key is nil"}
 	}
 
 	marshaledKey, err := x509.MarshalPKIXPublicKey(privateKey.Public())
 	if err != nil {
-		return nil, InternalError{fmt.Sprintf("error marshalling public key: %s", err)}
+		return nil, errutil.InternalError{Err: fmt.Sprintf("error marshalling public key: %s", err)}
 	}
 
 	subjKeyID := sha1.Sum(marshaledKey)
@@ -71,7 +71,7 @@ func ParsePKIMap(data map[string]interface{}) (*ParsedCertBundle, error) {
 	result := &CertBundle{}
 	err := mapstructure.Decode(data, result)
 	if err != nil {
-		return nil, UserError{err.Error()}
+		return nil, errutil.UserError{Err: err.Error()}
 	}
 
 	return result.ToParsedCertBundle()
@@ -84,44 +84,45 @@ func ParsePKIMap(data map[string]interface{}) (*ParsedCertBundle, error) {
 // JSON not coming from the PKI backend.
 func ParsePKIJSON(input []byte) (*ParsedCertBundle, error) {
 	result := &CertBundle{}
-	err := json.Unmarshal(input, &result)
+	err := jsonutil.DecodeJSON(input, &result)
 
 	if err == nil {
 		return result.ToParsedCertBundle()
 	}
 
 	var secret Secret
-	err = json.Unmarshal(input, &secret)
+	err = jsonutil.DecodeJSON(input, &secret)
 
 	if err == nil {
 		return ParsePKIMap(secret.Data)
 	}
 
-	return nil, UserError{"unable to parse out of either secret data or a secret object"}
+	return nil, errutil.UserError{Err: "unable to parse out of either secret data or a secret object"}
 }
 
 // ParsePEMBundle takes a string of concatenated PEM-format certificate
 // and private key values and decodes/parses them, checking validity along
-// the way. There must be at max two certificates (a certificate and its
-// issuing certificate) and one private key.
+// the way. The first certificate must be the subject certificate and issuing
+// certificates may follow.  There must be at most one private key.
 func ParsePEMBundle(pemBundle string) (*ParsedCertBundle, error) {
 	if len(pemBundle) == 0 {
-		return nil, UserError{"empty pem bundle"}
+		return nil, errutil.UserError{Err: "empty pem bundle"}
 	}
 
 	pemBytes := []byte(pemBundle)
 	var pemBlock *pem.Block
 	parsedBundle := &ParsedCertBundle{}
+	var certPath []*CertBlock
 
-	for {
+	for len(pemBytes) > 0 {
 		pemBlock, pemBytes = pem.Decode(pemBytes)
 		if pemBlock == nil {
-			return nil, UserError{"no data found"}
+			return nil, errutil.UserError{Err: "no data found in PEM block"}
 		}
 
 		if signer, err := x509.ParseECPrivateKey(pemBlock.Bytes); err == nil {
 			if parsedBundle.PrivateKeyType != UnknownPrivateKey {
-				return nil, UserError{"more than one private key given; provide only one private key in the bundle"}
+				return nil, errutil.UserError{Err: "more than one private key given; provide only one private key in the bundle"}
 			}
 			parsedBundle.PrivateKeyFormat = ECBlock
 			parsedBundle.PrivateKeyType = ECPrivateKey
@@ -130,7 +131,7 @@ func ParsePEMBundle(pemBundle string) (*ParsedCertBundle, error) {
 
 		} else if signer, err := x509.ParsePKCS1PrivateKey(pemBlock.Bytes); err == nil {
 			if parsedBundle.PrivateKeyType != UnknownPrivateKey {
-				return nil, UserError{"more than one private key given; provide only one private key in the bundle"}
+				return nil, errutil.UserError{Err: "more than one private key given; provide only one private key in the bundle"}
 			}
 			parsedBundle.PrivateKeyType = RSAPrivateKey
 			parsedBundle.PrivateKeyFormat = PKCS1Block
@@ -140,7 +141,7 @@ func ParsePEMBundle(pemBundle string) (*ParsedCertBundle, error) {
 			parsedBundle.PrivateKeyFormat = PKCS8Block
 
 			if parsedBundle.PrivateKeyType != UnknownPrivateKey {
-				return nil, UserError{"More than one private key given; provide only one private key in the bundle"}
+				return nil, errutil.UserError{Err: "More than one private key given; provide only one private key in the bundle"}
 			}
 			switch signer := signer.(type) {
 			case *rsa.PrivateKey:
@@ -153,48 +154,24 @@ func ParsePEMBundle(pemBundle string) (*ParsedCertBundle, error) {
 				parsedBundle.PrivateKeyBytes = pemBlock.Bytes
 			}
 		} else if certificates, err := x509.ParseCertificates(pemBlock.Bytes); err == nil {
-			switch len(certificates) {
-			case 0:
-				return nil, UserError{"pem block cannot be decoded to a private key or certificate"}
-
-			case 1:
-				if parsedBundle.Certificate != nil {
-					switch {
-					// We just found the issuing CA
-					case bytes.Equal(parsedBundle.Certificate.AuthorityKeyId, certificates[0].SubjectKeyId) && certificates[0].IsCA:
-						parsedBundle.IssuingCABytes = pemBlock.Bytes
-						parsedBundle.IssuingCA = certificates[0]
-
-					// Our saved certificate is actually the issuing CA
-					case bytes.Equal(parsedBundle.Certificate.SubjectKeyId, certificates[0].AuthorityKeyId) && parsedBundle.Certificate.IsCA:
-						parsedBundle.IssuingCA = parsedBundle.Certificate
-						parsedBundle.IssuingCABytes = parsedBundle.CertificateBytes
-						parsedBundle.CertificateBytes = pemBlock.Bytes
-						parsedBundle.Certificate = certificates[0]
-					}
-				} else {
-					switch {
-					// If this case isn't correct, the caller needs to assign
-					// the values to Certificate/CertificateBytes; assumptions
-					// made here will not be valid for all cases.
-					case certificates[0].IsCA:
-						parsedBundle.IssuingCABytes = pemBlock.Bytes
-						parsedBundle.IssuingCA = certificates[0]
-
-					default:
-						parsedBundle.CertificateBytes = pemBlock.Bytes
-						parsedBundle.Certificate = certificates[0]
-					}
-				}
-
-			default:
-				return nil, UserError{"too many certificates given; provide a maximum of two certificates in the bundle"}
-			}
+			certPath = append(certPath, &CertBlock{
+				Certificate: certificates[0],
+				Bytes:       pemBlock.Bytes,
+			})
 		}
+	}
 
-		if len(pemBytes) == 0 {
-			break
+	for i, certBlock := range certPath {
+		if i == 0 {
+			parsedBundle.Certificate = certBlock.Certificate
+			parsedBundle.CertificateBytes = certBlock.Bytes
+		} else {
+			parsedBundle.CAChain = append(parsedBundle.CAChain, certBlock)
 		}
+	}
+
+	if err := parsedBundle.Verify(); err != nil {
+		return nil, errutil.UserError{Err: fmt.Sprintf("verification of parsed bundle failed: %s", err)}
 	}
 
 	return parsedBundle, nil
@@ -212,7 +189,7 @@ func GeneratePrivateKey(keyType string, keyBits int, container ParsedPrivateKeyC
 		privateKeyType = RSAPrivateKey
 		privateKey, err = rsa.GenerateKey(rand.Reader, keyBits)
 		if err != nil {
-			return InternalError{Err: fmt.Sprintf("error generating RSA private key: %v", err)}
+			return errutil.InternalError{Err: fmt.Sprintf("error generating RSA private key: %v", err)}
 		}
 		privateKeyBytes = x509.MarshalPKCS1PrivateKey(privateKey.(*rsa.PrivateKey))
 	case "ec":
@@ -228,18 +205,18 @@ func GeneratePrivateKey(keyType string, keyBits int, container ParsedPrivateKeyC
 		case 521:
 			curve = elliptic.P521()
 		default:
-			return UserError{Err: fmt.Sprintf("unsupported bit length for EC key: %d", keyBits)}
+			return errutil.UserError{Err: fmt.Sprintf("unsupported bit length for EC key: %d", keyBits)}
 		}
 		privateKey, err = ecdsa.GenerateKey(curve, rand.Reader)
 		if err != nil {
-			return InternalError{Err: fmt.Sprintf("error generating EC private key: %v", err)}
+			return errutil.InternalError{Err: fmt.Sprintf("error generating EC private key: %v", err)}
 		}
 		privateKeyBytes, err = x509.MarshalECPrivateKey(privateKey.(*ecdsa.PrivateKey))
 		if err != nil {
-			return InternalError{Err: fmt.Sprintf("error marshalling EC private key: %v", err)}
+			return errutil.InternalError{Err: fmt.Sprintf("error marshalling EC private key: %v", err)}
 		}
 	default:
-		return UserError{Err: fmt.Sprintf("unknown key type: %s", keyType)}
+		return errutil.UserError{Err: fmt.Sprintf("unknown key type: %s", keyType)}
 	}
 
 	container.SetParsedPrivateKey(privateKey, privateKeyType, privateKeyBytes)
@@ -250,7 +227,7 @@ func GeneratePrivateKey(keyType string, keyBits int, container ParsedPrivateKeyC
 func GenerateSerialNumber() (*big.Int, error) {
 	serial, err := rand.Int(rand.Reader, (&big.Int{}).Exp(big.NewInt(2), big.NewInt(159), nil))
 	if err != nil {
-		return nil, InternalError{Err: fmt.Sprintf("error generating serial number: %v", err)}
+		return nil, errutil.InternalError{Err: fmt.Sprintf("error generating serial number: %v", err)}
 	}
 	return serial, nil
 }
@@ -295,6 +272,4 @@ func ComparePublicKeys(key1Iface, key2Iface crypto.PublicKey) (bool, error) {
 	default:
 		return false, fmt.Errorf("cannot compare key with type %T", key1Iface)
 	}
-
-	return false, fmt.Errorf("undefined error comparing public keys")
 }

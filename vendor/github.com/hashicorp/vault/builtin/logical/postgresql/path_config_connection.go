@@ -1,9 +1,11 @@
 package postgresql
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 
+	"github.com/fatih/structs"
 	"github.com/hashicorp/vault/logical"
 	"github.com/hashicorp/vault/logical/framework"
 	_ "github.com/lib/pq"
@@ -17,16 +19,19 @@ func pathConfigConnection(b *backend) *framework.Path {
 				Type:        framework.TypeString,
 				Description: "DB connection string",
 			},
+
 			"value": &framework.FieldSchema{
 				Type: framework.TypeString,
 				Description: `DB connection string. Use 'connection_url' instead.
 This will be deprecated.`,
 			},
+
 			"verify_connection": &framework.FieldSchema{
 				Type:        framework.TypeBool,
 				Default:     true,
 				Description: `If set, connection_url is verified by actually connecting to the database`,
 			},
+
 			"max_open_connections": &framework.FieldSchema{
 				Type: framework.TypeInt,
 				Description: `Maximum number of open connections to the database;
@@ -34,7 +39,6 @@ a zero uses the default value of two and a
 negative value means unlimited`,
 			},
 
-			// Implementation note:
 			"max_idle_connections": &framework.FieldSchema{
 				Type: framework.TypeInt,
 				Description: `Maximum number of idle connections to the database;
@@ -47,6 +51,7 @@ reduced to the same size.`,
 
 		Callbacks: map[logical.Operation]framework.OperationFunc{
 			logical.UpdateOperation: b.pathConnectionWrite,
+			logical.ReadOperation:   b.pathConnectionRead,
 		},
 
 		HelpSynopsis:    pathConfigConnectionHelpSyn,
@@ -54,8 +59,26 @@ reduced to the same size.`,
 	}
 }
 
-func (b *backend) pathConnectionWrite(
-	req *logical.Request, data *framework.FieldData) (*logical.Response, error) {
+// pathConnectionRead reads out the connection configuration
+func (b *backend) pathConnectionRead(ctx context.Context, req *logical.Request, data *framework.FieldData) (*logical.Response, error) {
+	entry, err := req.Storage.Get(ctx, "config/connection")
+	if err != nil {
+		return nil, fmt.Errorf("failed to read connection configuration")
+	}
+	if entry == nil {
+		return nil, nil
+	}
+
+	var config connectionConfig
+	if err := entry.DecodeJSON(&config); err != nil {
+		return nil, err
+	}
+	return &logical.Response{
+		Data: structs.New(config).Map(),
+	}, nil
+}
+
+func (b *backend) pathConnectionWrite(ctx context.Context, req *logical.Request, data *framework.FieldData) (*logical.Response, error) {
 	connValue := data.Get("value").(string)
 	connURL := data.Get("connection_url").(string)
 	if connURL == "" {
@@ -105,22 +128,25 @@ func (b *backend) pathConnectionWrite(
 	if err != nil {
 		return nil, err
 	}
-	if err := req.Storage.Put(entry); err != nil {
+	if err := req.Storage.Put(ctx, entry); err != nil {
 		return nil, err
 	}
 
 	// Reset the DB connection
-	b.ResetDB()
+	b.ResetDB(ctx)
 
-	return nil, nil
+	resp := &logical.Response{}
+	resp.AddWarning("Read access to this endpoint should be controlled via ACLs as it will return the connection string or URL as it is, including passwords, if any.")
+
+	return resp, nil
 }
 
 type connectionConfig struct {
-	ConnectionURL string `json:"connection_url"`
+	ConnectionURL string `json:"connection_url" structs:"connection_url" mapstructure:"connection_url"`
 	// Deprecate "value" in coming releases
-	ConnectionString   string `json:"value"`
-	MaxOpenConnections int    `json:"max_open_connections"`
-	MaxIdleConnections int    `json:"max_idle_connections"`
+	ConnectionString   string `json:"value" structs:"value" mapstructure:"value"`
+	MaxOpenConnections int    `json:"max_open_connections" structs:"max_open_connections" mapstructure:"max_open_connections"`
+	MaxIdleConnections int    `json:"max_idle_connections" structs:"max_idle_connections" mapstructure:"max_idle_connections"`
 }
 
 const pathConfigConnectionHelpSyn = `

@@ -1,47 +1,67 @@
 package logical
 
 import (
-	"strings"
+	"context"
 	"sync"
+
+	"github.com/hashicorp/vault/physical"
+	"github.com/hashicorp/vault/physical/inmem"
 )
 
-// InmemStorage implements Storage and stores all data in memory.
+// InmemStorage implements Storage and stores all data in memory. It is
+// basically a straight copy of physical.Inmem, but it prevents backends from
+// having to load all of physical's dependencies (which are legion) just to
+// have some testing storage.
 type InmemStorage struct {
-	Data map[string]*StorageEntry
-
-	once sync.Once
+	underlying physical.Backend
+	once       sync.Once
 }
 
-func (s *InmemStorage) List(prefix string) ([]string, error) {
+func (s *InmemStorage) Get(ctx context.Context, key string) (*StorageEntry, error) {
 	s.once.Do(s.init)
 
-	var result []string
-	for k, _ := range s.Data {
-		if strings.HasPrefix(k, prefix) {
-			result = append(result, k)
-		}
+	entry, err := s.underlying.Get(ctx, key)
+	if err != nil {
+		return nil, err
 	}
-
-	return result, nil
+	if entry == nil {
+		return nil, nil
+	}
+	return &StorageEntry{
+		Key:      entry.Key,
+		Value:    entry.Value,
+		SealWrap: entry.SealWrap,
+	}, nil
 }
 
-func (s *InmemStorage) Get(key string) (*StorageEntry, error) {
+func (s *InmemStorage) Put(ctx context.Context, entry *StorageEntry) error {
 	s.once.Do(s.init)
-	return s.Data[key], nil
+
+	return s.underlying.Put(ctx, &physical.Entry{
+		Key:      entry.Key,
+		Value:    entry.Value,
+		SealWrap: entry.SealWrap,
+	})
 }
 
-func (s *InmemStorage) Put(entry *StorageEntry) error {
+func (s *InmemStorage) Delete(ctx context.Context, key string) error {
 	s.once.Do(s.init)
-	s.Data[entry.Key] = entry
-	return nil
+
+	return s.underlying.Delete(ctx, key)
 }
 
-func (s *InmemStorage) Delete(k string) error {
+func (s *InmemStorage) List(ctx context.Context, prefix string) ([]string, error) {
 	s.once.Do(s.init)
-	delete(s.Data, k)
-	return nil
+
+	return s.underlying.List(ctx, prefix)
+}
+
+func (s *InmemStorage) Underlying() *inmem.InmemBackend {
+	s.once.Do(s.init)
+
+	return s.underlying.(*inmem.InmemBackend)
 }
 
 func (s *InmemStorage) init() {
-	s.Data = make(map[string]*StorageEntry)
+	s.underlying, _ = inmem.NewInmem(nil, nil)
 }

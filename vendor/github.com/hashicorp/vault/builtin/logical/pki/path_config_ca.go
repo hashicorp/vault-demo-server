@@ -1,9 +1,11 @@
 package pki
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/hashicorp/vault/helper/certutil"
+	"github.com/hashicorp/vault/helper/errutil"
 	"github.com/hashicorp/vault/logical"
 	"github.com/hashicorp/vault/logical/framework"
 )
@@ -15,9 +17,7 @@ func pathConfigCA(b *backend) *framework.Path {
 			"pem_bundle": &framework.FieldSchema{
 				Type: framework.TypeString,
 				Description: `PEM-format, concatenated unencrypted
-secret key and certificate, or, if a
-CSR was generated with the "generate"
-endpoint, just the signed certificate.`,
+secret key and certificate.`,
 			},
 		},
 
@@ -30,14 +30,17 @@ endpoint, just the signed certificate.`,
 	}
 }
 
-func (b *backend) pathCAWrite(
-	req *logical.Request, data *framework.FieldData) (*logical.Response, error) {
+func (b *backend) pathCAWrite(ctx context.Context, req *logical.Request, data *framework.FieldData) (*logical.Response, error) {
 	pemBundle := data.Get("pem_bundle").(string)
+
+	if pemBundle == "" {
+		return logical.ErrorResponse("'pem_bundle' was empty"), nil
+	}
 
 	parsedBundle, err := certutil.ParsePEMBundle(pemBundle)
 	if err != nil {
 		switch err.(type) {
-		case certutil.InternalError:
+		case errutil.InternalError:
 			return nil, err
 		default:
 			return logical.ErrorResponse(err.Error()), nil
@@ -47,23 +50,6 @@ func (b *backend) pathCAWrite(
 	if parsedBundle.PrivateKey == nil ||
 		parsedBundle.PrivateKeyType == certutil.UnknownPrivateKey {
 		return logical.ErrorResponse("private key not found in the PEM bundle"), nil
-	}
-
-	// Handle the case of a self-signed certificate; the parsing function will
-	// see the CA and put it into the issuer
-	if parsedBundle.Certificate == nil &&
-		parsedBundle.IssuingCA != nil {
-		equal, err := certutil.ComparePublicKeys(parsedBundle.IssuingCA.PublicKey, parsedBundle.PrivateKey.Public())
-		if err != nil {
-			return logical.ErrorResponse(fmt.Sprintf(
-				"got only a CA and private key but could not verify the public keys match: %v", err)), nil
-		}
-		if !equal {
-			return logical.ErrorResponse(
-				"got only a CA and private key but keys do not match"), nil
-		}
-		parsedBundle.Certificate = parsedBundle.IssuingCA
-		parsedBundle.CertificateBytes = parsedBundle.IssuingCABytes
 	}
 
 	if parsedBundle.Certificate == nil {
@@ -83,7 +69,7 @@ func (b *backend) pathCAWrite(
 	if err != nil {
 		return nil, err
 	}
-	err = req.Storage.Put(entry)
+	err = req.Storage.Put(ctx, entry)
 	if err != nil {
 		return nil, err
 	}
@@ -92,12 +78,12 @@ func (b *backend) pathCAWrite(
 	// location, plus a fresh CRL
 	entry.Key = "ca"
 	entry.Value = parsedBundle.CertificateBytes
-	err = req.Storage.Put(entry)
+	err = req.Storage.Put(ctx, entry)
 	if err != nil {
 		return nil, err
 	}
 
-	err = buildCRL(b, req)
+	err = buildCRL(ctx, b, req)
 
 	return nil, err
 }

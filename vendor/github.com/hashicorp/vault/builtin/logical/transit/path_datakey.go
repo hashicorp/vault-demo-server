@@ -1,11 +1,12 @@
 package transit
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/base64"
 	"fmt"
 
-	"github.com/hashicorp/vault/helper/certutil"
+	"github.com/hashicorp/vault/helper/errutil"
 	"github.com/hashicorp/vault/logical"
 	"github.com/hashicorp/vault/logical/framework"
 )
@@ -30,11 +31,24 @@ ciphertext; "wrapped" will return the ciphertext only.`,
 				Description: "Context for key derivation. Required for derived keys.",
 			},
 
+			"nonce": &framework.FieldSchema{
+				Type:        framework.TypeString,
+				Description: "Nonce for when convergent encryption v1 is used (only in Vault 0.6.1)",
+			},
+
 			"bits": &framework.FieldSchema{
 				Type: framework.TypeInt,
 				Description: `Number of bits for the key; currently 128, 256,
 and 512 bits are supported. Defaults to 256.`,
 				Default: 256,
+			},
+
+			"key_version": &framework.FieldSchema{
+				Type: framework.TypeInt,
+				Description: `The version of the Vault key to use for
+encryption of the data key. Must be 0 (for latest)
+or a value greater than or equal to the
+min_encryption_version configured on the key.`,
 			},
 		},
 
@@ -47,9 +61,9 @@ and 512 bits are supported. Defaults to 256.`,
 	}
 }
 
-func (b *backend) pathDatakeyWrite(
-	req *logical.Request, d *framework.FieldData) (*logical.Response, error) {
+func (b *backend) pathDatakeyWrite(ctx context.Context, req *logical.Request, d *framework.FieldData) (*logical.Response, error) {
 	name := d.Get("name").(string)
+	ver := d.Get("key_version").(int)
 
 	plaintext := d.Get("plaintext").(string)
 	plaintextAllowed := false
@@ -61,34 +75,38 @@ func (b *backend) pathDatakeyWrite(
 		return logical.ErrorResponse("Invalid path, must be 'plaintext' or 'wrapped'"), logical.ErrInvalidRequest
 	}
 
+	var err error
+
 	// Decode the context if any
 	contextRaw := d.Get("context").(string)
 	var context []byte
 	if len(contextRaw) != 0 {
-		var err error
 		context, err = base64.StdEncoding.DecodeString(contextRaw)
 		if err != nil {
-			return logical.ErrorResponse("failed to decode context as base64"), logical.ErrInvalidRequest
+			return logical.ErrorResponse("failed to base64-decode context"), logical.ErrInvalidRequest
+		}
+	}
+
+	// Decode the nonce if any
+	nonceRaw := d.Get("nonce").(string)
+	var nonce []byte
+	if len(nonceRaw) != 0 {
+		nonce, err = base64.StdEncoding.DecodeString(nonceRaw)
+		if err != nil {
+			return logical.ErrorResponse("failed to base64-decode nonce"), logical.ErrInvalidRequest
 		}
 	}
 
 	// Get the policy
-	lp, err := b.policies.getPolicy(req, name)
+	p, lock, err := b.lm.GetPolicyShared(ctx, req.Storage, name)
+	if lock != nil {
+		defer lock.RUnlock()
+	}
 	if err != nil {
 		return nil, err
 	}
-
-	// Error if invalid policy
-	if lp == nil {
-		return logical.ErrorResponse("policy not found"), logical.ErrInvalidRequest
-	}
-
-	lp.RLock()
-	defer lp.RUnlock()
-
-	// Verify if wasn't deleted before we grabbed the lock
-	if lp.policy == nil {
-		return nil, fmt.Errorf("no existing policy named %s could be found", name)
+	if p == nil {
+		return logical.ErrorResponse("encryption key not found"), logical.ErrInvalidRequest
 	}
 
 	newKey := make([]byte, 32)
@@ -107,12 +125,12 @@ func (b *backend) pathDatakeyWrite(
 		return nil, err
 	}
 
-	ciphertext, err := lp.policy.Encrypt(context, base64.StdEncoding.EncodeToString(newKey))
+	ciphertext, err := p.Encrypt(ver, context, nonce, base64.StdEncoding.EncodeToString(newKey))
 	if err != nil {
 		switch err.(type) {
-		case certutil.UserError:
+		case errutil.UserError:
 			return logical.ErrorResponse(err.Error()), logical.ErrInvalidRequest
-		case certutil.InternalError:
+		case errutil.InternalError:
 			return nil, err
 		default:
 			return nil, err

@@ -1,10 +1,10 @@
 package logical
 
 import (
-	"fmt"
-	"reflect"
+	"encoding/json"
+	"errors"
 
-	"github.com/mitchellh/copystructure"
+	"github.com/hashicorp/vault/helper/wrapping"
 )
 
 const (
@@ -30,94 +30,56 @@ const (
 // It is used to abstract the details of the higher level request protocol.
 type Response struct {
 	// Secret, if not nil, denotes that this response represents a secret.
-	Secret *Secret
+	Secret *Secret `json:"secret" structs:"secret" mapstructure:"secret"`
 
 	// Auth, if not nil, contains the authentication information for
 	// this response. This is only checked and means something for
 	// credential backends.
-	Auth *Auth
+	Auth *Auth `json:"auth" structs:"auth" mapstructure:"auth"`
 
 	// Response data is an opaque map that must have string keys. For
 	// secrets, this data is sent down to the user as-is. To store internal
 	// data that you don't want the user to see, store it in
 	// Secret.InternalData.
-	Data map[string]interface{}
+	Data map[string]interface{} `json:"data" structs:"data" mapstructure:"data"`
 
 	// Redirect is an HTTP URL to redirect to for further authentication.
 	// This is only valid for credential backends. This will be blanked
 	// for any logical backend and ignored.
-	Redirect string
+	Redirect string `json:"redirect" structs:"redirect" mapstructure:"redirect"`
 
 	// Warnings allow operations or backends to return warnings in response
 	// to user actions without failing the action outright.
-	// Making it private helps ensure that it is easy for various parts of
-	// Vault (backend, core, etc.) to add warnings without accidentally
-	// replacing what exists.
-	warnings []string
-}
+	Warnings []string `json:"warnings" structs:"warnings" mapstructure:"warnings"`
 
-func init() {
-	copystructure.Copiers[reflect.TypeOf(Response{})] = func(v interface{}) (interface{}, error) {
-		input := v.(Response)
-		ret := Response{
-			Redirect: input.Redirect,
-		}
-
-		if input.Secret != nil {
-			retSec, err := copystructure.Copy(input.Secret)
-			if err != nil {
-				return nil, fmt.Errorf("error copying Secret: %v", err)
-			}
-			ret.Secret = retSec.(*Secret)
-		}
-
-		if input.Auth != nil {
-			retAuth, err := copystructure.Copy(input.Auth)
-			if err != nil {
-				return nil, fmt.Errorf("error copying Secret: %v", err)
-			}
-			ret.Auth = retAuth.(*Auth)
-		}
-
-		if input.Data != nil {
-			retData, err := copystructure.Copy(&input.Data)
-			if err != nil {
-				return nil, fmt.Errorf("error copying Secret: %v", err)
-			}
-			ret.Data = retData.(map[string]interface{})
-		}
-
-		if input.Warnings() != nil {
-			for _, warning := range input.Warnings() {
-				ret.AddWarning(warning)
-			}
-		}
-
-		return &ret, nil
-	}
+	// Information for wrapping the response in a cubbyhole
+	WrapInfo *wrapping.ResponseWrapInfo `json:"wrap_info" structs:"wrap_info" mapstructure:"wrap_info"`
 }
 
 // AddWarning adds a warning into the response's warning list
 func (r *Response) AddWarning(warning string) {
-	if r.warnings == nil {
-		r.warnings = make([]string, 0, 1)
+	if r.Warnings == nil {
+		r.Warnings = make([]string, 0, 1)
 	}
-	r.warnings = append(r.warnings, warning)
-}
-
-// Warnings returns the list of warnings set on the response
-func (r *Response) Warnings() []string {
-	return r.warnings
-}
-
-// ClearWarnings clears the response's warning list
-func (r *Response) ClearWarnings() {
-	r.warnings = make([]string, 0, 1)
+	r.Warnings = append(r.Warnings, warning)
 }
 
 // IsError returns true if this response seems to indicate an error.
 func (r *Response) IsError() bool {
-	return r != nil && len(r.Data) == 1 && r.Data["error"] != nil
+	return r != nil && r.Data != nil && len(r.Data) == 1 && r.Data["error"] != nil
+}
+
+func (r *Response) Error() error {
+	if !r.IsError() {
+		return nil
+	}
+	switch r.Data["error"].(type) {
+	case string:
+		return errors.New(r.Data["error"].(string))
+	case error:
+		return r.Data["error"].(error)
+	}
+	return nil
 }
 
 // HelpResponse is used to format a help response
@@ -148,4 +110,44 @@ func ListResponse(keys []string) *Response {
 		resp.Data["keys"] = keys
 	}
 	return resp
+}
+
+// ListResponseWithInfo is used to format a response to a list operation and
+// return the keys as well as a map with corresponding key info.
+func ListResponseWithInfo(keys []string, keyInfo map[string]interface{}) *Response {
+	resp := ListResponse(keys)
+
+	keyInfoData := make(map[string]interface{})
+	for _, key := range keys {
+		val, ok := keyInfo[key]
+		if ok {
+			keyInfoData[key] = val
+		}
+	}
+
+	if len(keyInfoData) > 0 {
+		resp.Data["key_info"] = keyInfoData
+	}
+
+	return resp
+}
+
+// RespondWithStatusCode takes a response and converts it to a raw response with
+// the provided Status Code.
+func RespondWithStatusCode(resp *Response, req *Request, code int) (*Response, error) {
+	httpResp := LogicalResponseToHTTPResponse(resp)
+	httpResp.RequestID = req.ID
+
+	body, err := json.Marshal(httpResp)
+	if err != nil {
+		return nil, err
+	}
+
+	return &Response{
+		Data: map[string]interface{}{
+			HTTPContentType: "application/json",
+			HTTPRawBody:     body,
+			HTTPStatusCode:  code,
+		},
+	}, nil
 }

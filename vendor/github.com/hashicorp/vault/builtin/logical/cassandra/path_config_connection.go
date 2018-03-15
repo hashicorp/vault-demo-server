@@ -1,10 +1,12 @@
 package cassandra
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/fatih/structs"
 	"github.com/hashicorp/vault/helper/certutil"
+	"github.com/hashicorp/vault/helper/tlsutil"
 	"github.com/hashicorp/vault/logical"
 	"github.com/hashicorp/vault/logical/framework"
 )
@@ -40,6 +42,12 @@ set, this is automatically set to true`,
 effect if a CA certificate is provided`,
 			},
 
+			"tls_min_version": &framework.FieldSchema{
+				Type:        framework.TypeString,
+				Default:     "tls12",
+				Description: "Minimum TLS version to use. Accepted values are 'tls10', 'tls11' or 'tls12'. Defaults to 'tls12'",
+			},
+
 			"pem_bundle": &framework.FieldSchema{
 				Type: framework.TypeString,
 				Description: `PEM-format, concatenated unencrypted secret key
@@ -60,6 +68,12 @@ take precedence.`,
 				Type:        framework.TypeInt,
 				Description: `The protocol version to use. Defaults to 2.`,
 			},
+
+			"connect_timeout": &framework.FieldSchema{
+				Type:        framework.TypeDurationSecond,
+				Default:     5,
+				Description: `The connection timeout to use. Defaults to 5.`,
+			},
 		},
 
 		Callbacks: map[logical.Operation]framework.OperationFunc{
@@ -72,9 +86,8 @@ take precedence.`,
 	}
 }
 
-func (b *backend) pathConnectionRead(
-	req *logical.Request, data *framework.FieldData) (*logical.Response, error) {
-	entry, err := req.Storage.Get("config/connection")
+func (b *backend) pathConnectionRead(ctx context.Context, req *logical.Request, data *framework.FieldData) (*logical.Response, error) {
+	entry, err := req.Storage.Get(ctx, "config/connection")
 	if err != nil {
 		return nil, err
 	}
@@ -97,8 +110,7 @@ func (b *backend) pathConnectionRead(
 	}, nil
 }
 
-func (b *backend) pathConnectionWrite(
-	req *logical.Request, data *framework.FieldData) (*logical.Response, error) {
+func (b *backend) pathConnectionWrite(ctx context.Context, req *logical.Request, data *framework.FieldData) (*logical.Response, error) {
 	hosts := data.Get("hosts").(string)
 	username := data.Get("username").(string)
 	password := data.Get("password").(string)
@@ -119,6 +131,18 @@ func (b *backend) pathConnectionWrite(
 		TLS:             data.Get("tls").(bool),
 		InsecureTLS:     data.Get("insecure_tls").(bool),
 		ProtocolVersion: data.Get("protocol_version").(int),
+		ConnectTimeout:  data.Get("connect_timeout").(int),
+	}
+
+	config.TLSMinVersion = data.Get("tls_min_version").(string)
+	if config.TLSMinVersion == "" {
+		return logical.ErrorResponse("failed to get 'tls_min_version' value"), nil
+	}
+
+	var ok bool
+	_, ok = tlsutil.TLSLookup[config.TLSMinVersion]
+	if !ok {
+		return logical.ErrorResponse("invalid 'tls_min_version'"), nil
 	}
 
 	if config.InsecureTLS {
@@ -172,7 +196,7 @@ func (b *backend) pathConnectionWrite(
 	if err != nil {
 		return nil, err
 	}
-	if err := req.Storage.Put(entry); err != nil {
+	if err := req.Storage.Put(ctx, entry); err != nil {
 		return nil, err
 	}
 

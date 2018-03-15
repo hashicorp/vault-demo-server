@@ -1,4 +1,4 @@
-// +build windows plan9 darwin freebsd openbsd
+// +build android darwin nacl netbsd plan9 windows
 
 package mlock
 

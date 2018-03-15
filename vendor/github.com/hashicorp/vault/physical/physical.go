@@ -1,8 +1,27 @@
 package physical
 
-import "fmt"
+import (
+	"context"
+	"strings"
+	"sync"
+
+	log "github.com/mgutz/logxi/v1"
+)
 
 const DefaultParallelOperations = 128
+
+// The operation type
+type Operation string
+
+const (
+	DeleteOperation Operation = "delete"
+	GetOperation              = "get"
+	ListOperation             = "list"
+	PutOperation              = "put"
+)
+
+// ShutdownSignal
+type ShutdownChannel chan struct{}
 
 // Backend is the interface required for a physical
 // backend. A physical backend is used to durably store
@@ -12,34 +31,68 @@ const DefaultParallelOperations = 128
 // are expected to be thread safe.
 type Backend interface {
 	// Put is used to insert or update an entry
-	Put(entry *Entry) error
+	Put(ctx context.Context, entry *Entry) error
 
 	// Get is used to fetch an entry
-	Get(key string) (*Entry, error)
+	Get(ctx context.Context, key string) (*Entry, error)
 
 	// Delete is used to permanently delete an entry
-	Delete(key string) error
+	Delete(ctx context.Context, key string) error
 
 	// List is used ot list all the keys under a given
 	// prefix, up to the next prefix.
-	List(prefix string) ([]string, error)
+	List(ctx context.Context, prefix string) ([]string, error)
 }
 
-// HABackend is an extentions to the standard physical
+// HABackend is an extensions to the standard physical
 // backend to support high-availability. Vault only expects to
 // use mutual exclusion to allow multiple instances to act as a
 // hot standby for a leader that services all requests.
 type HABackend interface {
 	// LockWith is used for mutual exclusion based on the given key.
 	LockWith(key, value string) (Lock, error)
+
+	// Whether or not HA functionality is enabled
+	HAEnabled() bool
 }
 
-// AdvertiseDetect is an optional interface that an HABackend
-// can implement. If they do, an advertise address can be automatically
+// ToggleablePurgemonster is an interface for backends that can toggle on or
+// off special functionality and/or support purging. This is only used for the
+// cache, don't use it for other things.
+type ToggleablePurgemonster interface {
+	Purge(ctx context.Context)
+	SetEnabled(bool)
+}
+
+// RedirectDetect is an optional interface that an HABackend
+// can implement. If they do, a redirect address can be automatically
 // detected.
-type AdvertiseDetect interface {
+type RedirectDetect interface {
 	// DetectHostAddr is used to detect the host address
 	DetectHostAddr() (string, error)
+}
+
+// Callback signatures for RunServiceDiscovery
+type ActiveFunction func() bool
+type SealedFunction func() bool
+
+// ServiceDiscovery is an optional interface that an HABackend can implement.
+// If they do, the state of a backend is advertised to the service discovery
+// network.
+type ServiceDiscovery interface {
+	// NotifyActiveStateChange is used by Core to notify a backend
+	// capable of ServiceDiscovery that this Vault instance has changed
+	// its status to active or standby.
+	NotifyActiveStateChange() error
+
+	// NotifySealedStateChange is used by Core to notify a backend
+	// capable of ServiceDiscovery that Vault has changed its Sealed
+	// status to sealed or unsealed.
+	NotifySealedStateChange() error
+
+	// Run executes any background service discovery tasks until the
+	// shutdown channel is closed.
+	RunServiceDiscovery(waitGroup *sync.WaitGroup, shutdownCh ShutdownChannel, redirectAddr string, activeFunc ActiveFunction, sealedFunc SealedFunction) error
 }
 
 type Lock interface {
@@ -58,41 +111,15 @@ type Lock interface {
 
 // Entry is used to represent data stored by the physical backend
 type Entry struct {
-	Key   string
-	Value []byte
+	Key      string
+	Value    []byte
+	SealWrap bool `json:"seal_wrap,omitempty"`
 }
 
 // Factory is the factory function to create a physical backend.
-type Factory func(map[string]string) (Backend, error)
+type Factory func(config map[string]string, logger log.Logger) (Backend, error)
 
-// NewBackend returns a new backend with the given type and configuration.
-// The backend is looked up in the BuiltinBackends variable.
-func NewBackend(t string, conf map[string]string) (Backend, error) {
-	f, ok := BuiltinBackends[t]
-	if !ok {
-		return nil, fmt.Errorf("unknown physical backend type: %s", t)
-	}
-	return f(conf)
-}
-
-// BuiltinBackends is the list of built-in physical backends that can
-// be used with NewBackend.
-var BuiltinBackends = map[string]Factory{
-	"inmem": func(map[string]string) (Backend, error) {
-		return NewInmem(), nil
-	},
-	"consul":     newConsulBackend,
-	"zookeeper":  newZookeeperBackend,
-	"file":       newFileBackend,
-	"s3":         newS3Backend,
-	"dynamodb":   newDynamoDBBackend,
-	"etcd":       newEtcdBackend,
-	"mysql":      newMySQLBackend,
-	"postgresql": newPostgreSQLBackend,
-}
-
-// PermitPool is a wrapper around a semaphore library to keep things
-// agnostic
+// PermitPool is used to limit maximum outstanding requests
 type PermitPool struct {
 	sem chan int
 }
@@ -116,4 +143,16 @@ func (c *PermitPool) Acquire() {
 // Release returns a permit to the pool
 func (c *PermitPool) Release() {
 	<-c.sem
+}
+
+// Prefixes is a shared helper function returns all parent 'folders' for a
+// given vault key.
+// e.g. for 'foo/bar/baz', it returns ['foo', 'foo/bar']
+func Prefixes(s string) []string {
+	components := strings.Split(s, "/")
+	result := []string{}
+	for i := 1; i < len(components); i++ {
+		result = append(result, strings.Join(components[:i], "/"))
+	}
+	return result
 }

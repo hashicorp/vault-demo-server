@@ -1,6 +1,7 @@
 package cassandra
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/hashicorp/vault/logical"
@@ -30,46 +31,44 @@ func secretCreds(b *backend) *framework.Secret {
 	}
 }
 
-func (b *backend) secretCredsRenew(
-	req *logical.Request, d *framework.FieldData) (*logical.Response, error) {
+func (b *backend) secretCredsRenew(ctx context.Context, req *logical.Request, d *framework.FieldData) (*logical.Response, error) {
 	// Get the lease information
 	roleRaw, ok := req.Secret.InternalData["role"]
 	if !ok {
-		return nil, fmt.Errorf("Secret is missing role internal data")
+		return nil, fmt.Errorf("secret is missing role internal data")
 	}
 	roleName, ok := roleRaw.(string)
 	if !ok {
-		return nil, fmt.Errorf("Error converting role internal data to string")
+		return nil, fmt.Errorf("error converting role internal data to string")
 	}
 
-	role, err := getRole(req.Storage, roleName)
+	role, err := getRole(ctx, req.Storage, roleName)
 	if err != nil {
-		return nil, fmt.Errorf("Unable to load role: %s", err)
+		return nil, fmt.Errorf("unable to load role: %s", err)
 	}
 
-	return framework.LeaseExtend(role.Lease, 0, b.System())(req, d)
+	return framework.LeaseExtend(role.Lease, 0, b.System())(ctx, req, d)
 }
 
-func (b *backend) secretCredsRevoke(
-	req *logical.Request, d *framework.FieldData) (*logical.Response, error) {
+func (b *backend) secretCredsRevoke(ctx context.Context, req *logical.Request, d *framework.FieldData) (*logical.Response, error) {
 	// Get the username from the internal data
 	usernameRaw, ok := req.Secret.InternalData["username"]
 	if !ok {
-		return nil, fmt.Errorf("Secret is missing username internal data")
+		return nil, fmt.Errorf("secret is missing username internal data")
 	}
 	username, ok := usernameRaw.(string)
 	if !ok {
-		return nil, fmt.Errorf("Error converting username internal data to string")
+		return nil, fmt.Errorf("error converting username internal data to string")
 	}
 
-	session, err := b.DB(req.Storage)
+	session, err := b.DB(ctx, req.Storage)
 	if err != nil {
-		return nil, fmt.Errorf("Error getting session")
+		return nil, fmt.Errorf("error getting session")
 	}
 
 	err = session.Query(fmt.Sprintf("DROP USER '%s'", username)).Exec()
 	if err != nil {
-		return nil, fmt.Errorf("Error removing user %s", username)
+		return nil, fmt.Errorf("error removing user %s", username)
 	}
 
 	return nil, nil

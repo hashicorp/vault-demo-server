@@ -1,26 +1,28 @@
 package userpass
 
 import (
+	"context"
+
 	"github.com/hashicorp/vault/helper/mfa"
 	"github.com/hashicorp/vault/logical"
 	"github.com/hashicorp/vault/logical/framework"
 )
 
-func Factory(conf *logical.BackendConfig) (logical.Backend, error) {
-	return Backend().Setup(conf)
+func Factory(ctx context.Context, conf *logical.BackendConfig) (logical.Backend, error) {
+	b := Backend()
+	if err := b.Setup(ctx, conf); err != nil {
+		return nil, err
+	}
+	return b, nil
 }
 
-func Backend() *framework.Backend {
+func Backend() *backend {
 	var b backend
 	b.Backend = &framework.Backend{
 		Help: backendHelp,
 
 		PathsSpecial: &logical.Paths{
-			Root: append([]string{
-				"users/*",
-			},
-				mfa.MFARootPaths()...,
-			),
+			Root: mfa.MFARootPaths(),
 
 			Unauthenticated: []string{
 				"login/*",
@@ -29,14 +31,18 @@ func Backend() *framework.Backend {
 
 		Paths: append([]*framework.Path{
 			pathUsers(&b),
+			pathUsersList(&b),
+			pathUserPolicies(&b),
+			pathUserPassword(&b),
 		},
 			mfa.MFAPaths(b.Backend, pathLogin(&b))...,
 		),
 
-		AuthRenew: b.pathLoginRenew,
+		AuthRenew:   b.pathLoginRenew,
+		BackendType: logical.TypeCredential,
 	}
 
-	return b.Backend
+	return &b
 }
 
 type backend struct {

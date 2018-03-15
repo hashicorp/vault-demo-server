@@ -1,13 +1,29 @@
 package cert
 
 import (
+	"context"
+	"crypto/x509"
 	"fmt"
 	"strings"
 	"time"
 
+	"github.com/hashicorp/vault/helper/policyutil"
 	"github.com/hashicorp/vault/logical"
 	"github.com/hashicorp/vault/logical/framework"
 )
+
+func pathListCerts(b *backend) *framework.Path {
+	return &framework.Path{
+		Pattern: "certs/?",
+
+		Callbacks: map[logical.Operation]framework.OperationFunc{
+			logical.ListOperation: b.pathCertList,
+		},
+
+		HelpSynopsis:    pathCertHelpSyn,
+		HelpDescription: pathCertHelpDesc,
+	}
+}
 
 func pathCerts(b *backend) *framework.Path {
 	return &framework.Path{
@@ -24,6 +40,19 @@ func pathCerts(b *backend) *framework.Path {
 Must be x509 PEM encoded.`,
 			},
 
+			"allowed_names": &framework.FieldSchema{
+				Type: framework.TypeCommaStringSlice,
+				Description: `A comma-separated list of names.
+At least one must exist in either the Common Name or SANs. Supports globbing.`,
+			},
+
+			"required_extensions": &framework.FieldSchema{
+				Type: framework.TypeCommaStringSlice,
+				Description: `A comma-separated string or array of extensions
+formatted as "oid:value". Expects the extension value to be some type of ASN1 encoded string.
+All values much match. Supports globbing on "value".`,
+			},
+
 			"display_name": &framework.FieldSchema{
 				Type: framework.TypeString,
 				Description: `The display name to use for clients using this
@@ -31,8 +60,8 @@ certificate.`,
 			},
 
 			"policies": &framework.FieldSchema{
-				Type:        framework.TypeString,
-				Description: "Comma-seperated list of policies.",
+				Type:        framework.TypeCommaStringSlice,
+				Description: "Comma-separated list of policies.",
 			},
 
 			"lease": &framework.FieldSchema{
@@ -46,12 +75,25 @@ seconds. Defaults to system/backend default TTL.`,
 				Description: `TTL for tokens issued by this backend.
 Defaults to system/backend default TTL time.`,
 			},
+			"max_ttl": &framework.FieldSchema{
+				Type: framework.TypeDurationSecond,
+				Description: `Duration in either an integer number of seconds (3600) or
+an integer time unit (60m) after which the
+issued token can no longer be renewed.`,
+			},
+			"period": &framework.FieldSchema{
+				Type: framework.TypeDurationSecond,
+				Description: `If set, indicates that the token generated using this role
+should never expire. The token should be renewed within the
+duration specified by this value. At each renewal, the token's
+TTL will be set to the value of this parameter.`,
+			},
 		},
 
 		Callbacks: map[logical.Operation]framework.OperationFunc{
 			logical.DeleteOperation: b.pathCertDelete,
 			logical.ReadOperation:   b.pathCertRead,
-			logical.UpdateOperation:  b.pathCertWrite,
+			logical.UpdateOperation: b.pathCertWrite,
 		},
 
 		HelpSynopsis:    pathCertHelpSyn,
@@ -59,8 +101,8 @@ Defaults to system/backend default TTL time.`,
 	}
 }
 
-func (b *backend) Cert(s logical.Storage, n string) (*CertEntry, error) {
-	entry, err := s.Get("cert/" + strings.ToLower(n))
+func (b *backend) Cert(ctx context.Context, s logical.Storage, n string) (*CertEntry, error) {
+	entry, err := s.Get(ctx, "cert/"+strings.ToLower(n))
 	if err != nil {
 		return nil, err
 	}
@@ -75,18 +117,24 @@ func (b *backend) Cert(s logical.Storage, n string) (*CertEntry, error) {
 	return &result, nil
 }
 
-func (b *backend) pathCertDelete(
-	req *logical.Request, d *framework.FieldData) (*logical.Response, error) {
-	err := req.Storage.Delete("cert/" + strings.ToLower(d.Get("name").(string)))
+func (b *backend) pathCertDelete(ctx context.Context, req *logical.Request, d *framework.FieldData) (*logical.Response, error) {
+	err := req.Storage.Delete(ctx, "cert/"+strings.ToLower(d.Get("name").(string)))
 	if err != nil {
 		return nil, err
 	}
 	return nil, nil
 }
 
-func (b *backend) pathCertRead(
-	req *logical.Request, d *framework.FieldData) (*logical.Response, error) {
-	cert, err := b.Cert(req.Storage, strings.ToLower(d.Get("name").(string)))
+func (b *backend) pathCertList(ctx context.Context, req *logical.Request, d *framework.FieldData) (*logical.Response, error) {
+	certs, err := req.Storage.List(ctx, "cert/")
+	if err != nil {
+		return nil, err
+	}
+	return logical.ListResponse(certs), nil
+}
+
+func (b *backend) pathCertRead(ctx context.Context, req *logical.Request, d *framework.FieldData) (*logical.Response, error) {
+	cert, err := b.Cert(ctx, req.Storage, strings.ToLower(d.Get("name").(string)))
 	if err != nil {
 		return nil, err
 	}
@@ -94,29 +142,66 @@ func (b *backend) pathCertRead(
 		return nil, nil
 	}
 
-	duration := cert.TTL
-	if duration == 0 {
-		duration = b.System().DefaultLeaseTTL()
-	}
-
 	return &logical.Response{
 		Data: map[string]interface{}{
-			"certificate":  cert.Certificate,
-			"display_name": cert.DisplayName,
-			"policies":     strings.Join(cert.Policies, ","),
-			"ttl":          duration / time.Second,
+			"certificate":   cert.Certificate,
+			"display_name":  cert.DisplayName,
+			"policies":      cert.Policies,
+			"ttl":           cert.TTL / time.Second,
+			"max_ttl":       cert.MaxTTL / time.Second,
+			"period":        cert.Period / time.Second,
+			"allowed_names": cert.AllowedNames,
 		},
 	}, nil
 }
 
-func (b *backend) pathCertWrite(
-	req *logical.Request, d *framework.FieldData) (*logical.Response, error) {
+func (b *backend) pathCertWrite(ctx context.Context, req *logical.Request, d *framework.FieldData) (*logical.Response, error) {
 	name := strings.ToLower(d.Get("name").(string))
 	certificate := d.Get("certificate").(string)
 	displayName := d.Get("display_name").(string)
-	policies := strings.Split(d.Get("policies").(string), ",")
-	for i, p := range policies {
-		policies[i] = strings.TrimSpace(p)
+	policies := policyutil.ParsePolicies(d.Get("policies"))
+	allowedNames := d.Get("allowed_names").([]string)
+	requiredExtensions := d.Get("required_extensions").([]string)
+
+	var resp logical.Response
+
+	// Parse the ttl (or lease duration)
+	systemDefaultTTL := b.System().DefaultLeaseTTL()
+	ttl := time.Duration(d.Get("ttl").(int)) * time.Second
+	if ttl == 0 {
+		ttl = time.Duration(d.Get("lease").(int)) * time.Second
+	}
+	if ttl > systemDefaultTTL {
+		resp.AddWarning(fmt.Sprintf("Given ttl of %d seconds is greater than current mount/system default of %d seconds", ttl/time.Second, systemDefaultTTL/time.Second))
+	}
+
+	if ttl < time.Duration(0) {
+		return logical.ErrorResponse("ttl cannot be negative"), nil
+	}
+
+	// Parse max_ttl
+	systemMaxTTL := b.System().MaxLeaseTTL()
+	maxTTL := time.Duration(d.Get("max_ttl").(int)) * time.Second
+	if maxTTL > systemMaxTTL {
+		resp.AddWarning(fmt.Sprintf("Given max_ttl of %d seconds is greater than current mount/system default of %d seconds", maxTTL/time.Second, systemMaxTTL/time.Second))
+	}
+
+	if maxTTL < time.Duration(0) {
+		return logical.ErrorResponse("max_ttl cannot be negative"), nil
+	}
+
+	if maxTTL != 0 && ttl > maxTTL {
+		return logical.ErrorResponse("ttl should be shorter than max_ttl"), nil
+	}
+
+	// Parse period
+	period := time.Duration(d.Get("period").(int)) * time.Second
+	if period > systemMaxTTL {
+		resp.AddWarning(fmt.Sprintf("Given period of %d seconds is greater than the backend's maximum TTL of %d seconds", period/time.Second, systemMaxTTL/time.Second))
+	}
+
+	if period < time.Duration(0) {
+		return logical.ErrorResponse("period cannot be negative"), nil
 	}
 
 	// Default the display name to the certificate name if not given
@@ -124,33 +209,35 @@ func (b *backend) pathCertWrite(
 		displayName = name
 	}
 
-	if len(policies) == 0 {
-		return logical.ErrorResponse("policies required"), nil
-	}
 	parsed := parsePEM([]byte(certificate))
 	if len(parsed) == 0 {
 		return logical.ErrorResponse("failed to parse certificate"), nil
 	}
 
-	certEntry := &CertEntry{
-		Name:        name,
-		Certificate: certificate,
-		DisplayName: displayName,
-		Policies:    policies,
+	// If the certificate is not a CA cert, then ensure that x509.ExtKeyUsageClientAuth is set
+	if !parsed[0].IsCA && parsed[0].ExtKeyUsage != nil {
+		var clientAuth bool
+		for _, usage := range parsed[0].ExtKeyUsage {
+			if usage == x509.ExtKeyUsageClientAuth || usage == x509.ExtKeyUsageAny {
+				clientAuth = true
+				break
+			}
+		}
+		if !clientAuth {
+			return logical.ErrorResponse("non-CA certificates should have TLS client authentication set as an extended key usage"), nil
+		}
 	}
 
-	// Parse the lease duration or default to backend/system default
-	var err error
-	maxTTL := b.System().MaxLeaseTTL()
-	ttl := time.Duration(d.Get("ttl").(int)) * time.Second
-	if ttl == time.Duration(0) {
-		ttl = time.Second * time.Duration(d.Get("lease").(int))
-	}
-	if ttl > maxTTL {
-		return logical.ErrorResponse(fmt.Sprintf("Given TTL of %d seconds greater than current mount/system default of %d seconds", ttl/time.Second, maxTTL/time.Second)), nil
-	}
-	if ttl > time.Duration(0) {
-		certEntry.TTL = ttl
+	certEntry := &CertEntry{
+		Name:               name,
+		Certificate:        certificate,
+		DisplayName:        displayName,
+		Policies:           policies,
+		AllowedNames:       allowedNames,
+		RequiredExtensions: requiredExtensions,
+		TTL:                ttl,
+		MaxTTL:             maxTTL,
+		Period:             period,
 	}
 
 	// Store it
@@ -158,18 +245,27 @@ func (b *backend) pathCertWrite(
 	if err != nil {
 		return nil, err
 	}
-	if err := req.Storage.Put(entry); err != nil {
+	if err := req.Storage.Put(ctx, entry); err != nil {
 		return nil, err
 	}
-	return nil, nil
+
+	if len(resp.Warnings) == 0 {
+		return nil, nil
+	}
+
+	return &resp, nil
 }
 
 type CertEntry struct {
-	Name        string
-	Certificate string
-	DisplayName string
-	Policies    []string
-	TTL         time.Duration
+	Name               string
+	Certificate        string
+	DisplayName        string
+	Policies           []string
+	TTL                time.Duration
+	MaxTTL             time.Duration
+	Period             time.Duration
+	AllowedNames       []string
+	RequiredExtensions []string
 }
 
 const pathCertHelpSyn = `

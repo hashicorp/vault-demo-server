@@ -1,6 +1,7 @@
 package framework
 
 import (
+	"context"
 	"fmt"
 	"time"
 
@@ -8,7 +9,8 @@ import (
 )
 
 // LeaseExtend returns an OperationFunc that can be used to simply extend the
-// lease of the auth/secret for the duration that was requested.
+// lease of the auth/secret for the duration that was requested. The parameters
+// provided are used to determine the lease's new TTL value.
 //
 // backendIncrement is the backend's requested increment -- perhaps from a user
 // request, perhaps from a role/config value. If not set, uses the mount/system
@@ -20,7 +22,7 @@ import (
 // systemView is the system view from the calling backend, used to determine
 // and/or correct default/max times.
 func LeaseExtend(backendIncrement, backendMax time.Duration, systemView logical.SystemView) OperationFunc {
-	return func(req *logical.Request, data *FieldData) (*logical.Response, error) {
+	return func(ctx context.Context, req *logical.Request, data *FieldData) (*logical.Response, error) {
 		var leaseOpts *logical.LeaseOptions
 		switch {
 		case req.Auth != nil:
@@ -45,10 +47,10 @@ func LeaseExtend(backendIncrement, backendMax time.Duration, systemView logical.
 		}
 
 		// We cannot go past this time
-		maxValidTime := leaseOpts.IssueTime.UTC().Add(max)
+		maxValidTime := leaseOpts.IssueTime.Add(max)
 
 		// Get the current time
-		now := time.Now().UTC()
+		now := time.Now()
 
 		// If we are past the max TTL, we shouldn't be in this function...but
 		// fast path out if we are

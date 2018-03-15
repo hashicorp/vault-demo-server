@@ -3,12 +3,12 @@ package pgpkeys
 import (
 	"bytes"
 	"encoding/base64"
-	"encoding/json"
 	"fmt"
 	"strings"
 
 	"github.com/hashicorp/go-cleanhttp"
-	"golang.org/x/crypto/openpgp"
+	"github.com/hashicorp/vault/helper/jsonutil"
+	"github.com/keybase/go-crypto/openpgp"
 )
 
 const (
@@ -49,29 +49,28 @@ func FetchKeybasePubkeys(input []string) (map[string]string, error) {
 	}
 	defer resp.Body.Close()
 
-	type publicKeys struct {
+	type PublicKeys struct {
 		Primary struct {
 			Bundle string
 		}
 	}
 
-	type them struct {
-		publicKeys `json:"public_keys"`
+	type LThem struct {
+		PublicKeys `json:"public_keys"`
 	}
 
-	type kbResp struct {
+	type KbResp struct {
 		Status struct {
 			Name string
 		}
-		Them []them
+		Them []LThem
 	}
 
-	out := &kbResp{
-		Them: []them{},
+	out := &KbResp{
+		Them: []LThem{},
 	}
 
-	dec := json.NewDecoder(resp.Body)
-	if err := dec.Decode(out); err != nil {
+	if err := jsonutil.DecodeJSONFromReader(resp.Body, out); err != nil {
 		return nil, err
 	}
 

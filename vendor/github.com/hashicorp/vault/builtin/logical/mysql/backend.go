@@ -1,6 +1,7 @@
 package mysql
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"strings"
@@ -11,18 +12,22 @@ import (
 	"github.com/hashicorp/vault/logical/framework"
 )
 
-func Factory(conf *logical.BackendConfig) (logical.Backend, error) {
-	return Backend().Setup(conf)
+func Factory(ctx context.Context, conf *logical.BackendConfig) (logical.Backend, error) {
+	b := Backend()
+	if err := b.Setup(ctx, conf); err != nil {
+		return nil, err
+	}
+	return b, nil
 }
 
-func Backend() *framework.Backend {
+func Backend() *backend {
 	var b backend
 	b.Backend = &framework.Backend{
 		Help: strings.TrimSpace(backendHelp),
 
 		PathsSpecial: &logical.Paths{
-			Root: []string{
-				"config/*",
+			SealWrapStorage: []string{
+				"config/connection",
 			},
 		},
 
@@ -37,9 +42,13 @@ func Backend() *framework.Backend {
 		Secrets: []*framework.Secret{
 			secretCreds(&b),
 		},
+
+		Invalidate:  b.invalidate,
+		Clean:       b.ResetDB,
+		BackendType: logical.TypeLogical,
 	}
 
-	return b.Backend
+	return &b
 }
 
 type backend struct {
@@ -50,17 +59,22 @@ type backend struct {
 }
 
 // DB returns the database connection.
-func (b *backend) DB(s logical.Storage) (*sql.DB, error) {
+func (b *backend) DB(ctx context.Context, s logical.Storage) (*sql.DB, error) {
 	b.lock.Lock()
 	defer b.lock.Unlock()
 
 	// If we already have a DB, we got it!
 	if b.db != nil {
-		return b.db, nil
+		if err := b.db.Ping(); err == nil {
+			return b.db, nil
+		}
+		// If the ping was unsuccessful, close it and ignore errors as we'll be
+		// reestablishing anyways
+		b.db.Close()
 	}
 
 	// Otherwise, attempt to make connection
-	entry, err := s.Get("config/connection")
+	entry, err := s.Get(ctx, "config/connection")
 	if err != nil {
 		return nil, err
 	}
@@ -87,12 +101,13 @@ func (b *backend) DB(s logical.Storage) (*sql.DB, error) {
 	// Set some connection pool settings. We don't need much of this,
 	// since the request rate shouldn't be high.
 	b.db.SetMaxOpenConns(connConfig.MaxOpenConnections)
+	b.db.SetMaxIdleConns(connConfig.MaxIdleConnections)
 
 	return b.db, nil
 }
 
 // ResetDB forces a connection next time DB() is called.
-func (b *backend) ResetDB() {
+func (b *backend) ResetDB(_ context.Context) {
 	b.lock.Lock()
 	defer b.lock.Unlock()
 
@@ -103,9 +118,16 @@ func (b *backend) ResetDB() {
 	b.db = nil
 }
 
+func (b *backend) invalidate(ctx context.Context, key string) {
+	switch key {
+	case "config/connection":
+		b.ResetDB(ctx)
+	}
+}
+
 // Lease returns the lease information
-func (b *backend) Lease(s logical.Storage) (*configLease, error) {
-	entry, err := s.Get("config/lease")
+func (b *backend) Lease(ctx context.Context, s logical.Storage) (*configLease, error) {
+	entry, err := s.Get(ctx, "config/lease")
 	if err != nil {
 		return nil, err
 	}

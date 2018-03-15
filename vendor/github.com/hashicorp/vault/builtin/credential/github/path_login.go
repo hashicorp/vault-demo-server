@@ -1,12 +1,13 @@
 package github
 
 import (
+	"context"
 	"fmt"
 	"net/url"
-	"reflect"
-	"sort"
+	"strings"
 
 	"github.com/google/go-github/github"
+	"github.com/hashicorp/vault/helper/policyutil"
 	"github.com/hashicorp/vault/logical"
 	"github.com/hashicorp/vault/logical/framework"
 )
@@ -22,18 +23,17 @@ func pathLogin(b *backend) *framework.Path {
 		},
 
 		Callbacks: map[logical.Operation]framework.OperationFunc{
-			logical.UpdateOperation: b.pathLogin,
+			logical.UpdateOperation:         b.pathLogin,
+			logical.AliasLookaheadOperation: b.pathLoginAliasLookahead,
 		},
 	}
 }
 
-func (b *backend) pathLogin(
-	req *logical.Request, data *framework.FieldData) (*logical.Response, error) {
-
+func (b *backend) pathLoginAliasLookahead(ctx context.Context, req *logical.Request, data *framework.FieldData) (*logical.Response, error) {
 	token := data.Get("token").(string)
 
 	var verifyResp *verifyCredentialsResp
-	if verifyResponse, resp, err := b.verifyCredentials(req, token); err != nil {
+	if verifyResponse, resp, err := b.verifyCredentials(ctx, req, token); err != nil {
 		return nil, err
 	} else if resp != nil {
 		return resp, nil
@@ -41,17 +41,38 @@ func (b *backend) pathLogin(
 		verifyResp = verifyResponse
 	}
 
-	config, err := b.Config(req.Storage)
+	return &logical.Response{
+		Auth: &logical.Auth{
+			Alias: &logical.Alias{
+				Name: *verifyResp.User.Login,
+			},
+		},
+	}, nil
+}
+
+func (b *backend) pathLogin(ctx context.Context, req *logical.Request, data *framework.FieldData) (*logical.Response, error) {
+	token := data.Get("token").(string)
+
+	var verifyResp *verifyCredentialsResp
+	if verifyResponse, resp, err := b.verifyCredentials(ctx, req, token); err != nil {
+		return nil, err
+	} else if resp != nil {
+		return resp, nil
+	} else {
+		verifyResp = verifyResponse
+	}
+
+	config, err := b.Config(ctx, req.Storage)
 	if err != nil {
 		return nil, err
 	}
 
-	ttl, _, err := b.SanitizeTTL(config.TTL.String(), config.MaxTTL.String())
+	ttl, _, err := b.SanitizeTTLStr(config.TTL.String(), config.MaxTTL.String())
 	if err != nil {
-		return logical.ErrorResponse(fmt.Sprintf("[ERR]:%s", err)), nil
+		return logical.ErrorResponse(fmt.Sprintf("error sanitizing TTLs: %s", err)), nil
 	}
 
-	return &logical.Response{
+	resp := &logical.Response{
 		Auth: &logical.Auth{
 			InternalData: map[string]interface{}{
 				"token": token,
@@ -66,41 +87,75 @@ func (b *backend) pathLogin(
 				TTL:       ttl,
 				Renewable: true,
 			},
+			Alias: &logical.Alias{
+				Name: *verifyResp.User.Login,
+			},
 		},
-	}, nil
+	}
+
+	for _, teamName := range verifyResp.TeamNames {
+		if teamName == "" {
+			continue
+		}
+		resp.Auth.GroupAliases = append(resp.Auth.GroupAliases, &logical.Alias{
+			Name: teamName,
+		})
+	}
+
+	return resp, nil
 }
 
-func (b *backend) pathLoginRenew(
-	req *logical.Request, d *framework.FieldData) (*logical.Response, error) {
+func (b *backend) pathLoginRenew(ctx context.Context, req *logical.Request, d *framework.FieldData) (*logical.Response, error) {
+	if req.Auth == nil {
+		return nil, fmt.Errorf("request auth was nil")
+	}
 
-	token := req.Auth.InternalData["token"].(string)
+	tokenRaw, ok := req.Auth.InternalData["token"]
+	if !ok {
+		return nil, fmt.Errorf("token created in previous version of Vault cannot be validated properly at renewal time")
+	}
+	token := tokenRaw.(string)
 
 	var verifyResp *verifyCredentialsResp
-	if verifyResponse, resp, err := b.verifyCredentials(req, token); err != nil {
+	if verifyResponse, resp, err := b.verifyCredentials(ctx, req, token); err != nil {
 		return nil, err
 	} else if resp != nil {
 		return resp, nil
 	} else {
 		verifyResp = verifyResponse
 	}
-	sort.Strings(req.Auth.Policies)
-	if !reflect.DeepEqual(verifyResp.Policies, req.Auth.Policies) {
-		return logical.ErrorResponse("policies do not match"), nil
+	if !policyutil.EquivalentPolicies(verifyResp.Policies, req.Auth.Policies) {
+		return nil, fmt.Errorf("policies do not match")
 	}
 
-	config, err := b.Config(req.Storage)
+	config, err := b.Config(ctx, req.Storage)
 	if err != nil {
 		return nil, err
 	}
-	return framework.LeaseExtend(config.TTL, config.MaxTTL, b.System())(req, d)
+
+	resp, err := framework.LeaseExtend(config.TTL, config.MaxTTL, b.System())(ctx, req, d)
+	if err != nil {
+		return nil, err
+	}
+
+	// Remove old aliases
+	resp.Auth.GroupAliases = nil
+
+	for _, teamName := range verifyResp.TeamNames {
+		resp.Auth.GroupAliases = append(resp.Auth.GroupAliases, &logical.Alias{
+			Name: teamName,
+		})
+	}
+
+	return resp, nil
 }
 
-func (b *backend) verifyCredentials(req *logical.Request, token string) (*verifyCredentialsResp, *logical.Response, error) {
-	config, err := b.Config(req.Storage)
+func (b *backend) verifyCredentials(ctx context.Context, req *logical.Request, token string) (*verifyCredentialsResp, *logical.Response, error) {
+	config, err := b.Config(ctx, req.Storage)
 	if err != nil {
 		return nil, nil, err
 	}
-	if config.Org == "" {
+	if config.Organization == "" {
 		return nil, logical.ErrorResponse(
 			"configure the github credential backend first"), nil
 	}
@@ -119,7 +174,7 @@ func (b *backend) verifyCredentials(req *logical.Request, token string) (*verify
 	}
 
 	// Get the user
-	user, _, err := client.Users.Get("")
+	user, _, err := client.Users.Get(ctx, "")
 	if err != nil {
 		return nil, nil, err
 	}
@@ -131,9 +186,9 @@ func (b *backend) verifyCredentials(req *logical.Request, token string) (*verify
 		PerPage: 100,
 	}
 
-	var allOrgs []github.Organization
+	var allOrgs []*github.Organization
 	for {
-		orgs, resp, err := client.Organizations.List("", orgOpt)
+		orgs, resp, err := client.Organizations.List(ctx, "", orgOpt)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -145,8 +200,8 @@ func (b *backend) verifyCredentials(req *logical.Request, token string) (*verify
 	}
 
 	for _, o := range allOrgs {
-		if *o.Login == config.Org {
-			org = &o
+		if strings.ToLower(*o.Login) == strings.ToLower(config.Organization) {
+			org = o
 			break
 		}
 	}
@@ -161,9 +216,9 @@ func (b *backend) verifyCredentials(req *logical.Request, token string) (*verify
 		PerPage: 100,
 	}
 
-	var allTeams []github.Team
+	var allTeams []*github.Team
 	for {
-		teams, resp, err := client.Organizations.ListUserTeams(teamOpt)
+		teams, resp, err := client.Organizations.ListUserTeams(ctx, teamOpt)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -187,19 +242,29 @@ func (b *backend) verifyCredentials(req *logical.Request, token string) (*verify
 		}
 	}
 
-	policiesList, err := b.Map.Policies(req.Storage, teamNames...)
+	groupPoliciesList, err := b.TeamMap.Policies(ctx, req.Storage, teamNames...)
+
 	if err != nil {
 		return nil, nil, err
 	}
+
+	userPoliciesList, err := b.UserMap.Policies(ctx, req.Storage, []string{*user.Login}...)
+
+	if err != nil {
+		return nil, nil, err
+	}
+
 	return &verifyCredentialsResp{
-		User:     user,
-		Org:      org,
-		Policies: policiesList,
+		User:      user,
+		Org:       org,
+		Policies:  append(groupPoliciesList, userPoliciesList...),
+		TeamNames: teamNames,
 	}, nil, nil
 }
 
 type verifyCredentialsResp struct {
-	User     *github.User
-	Org      *github.Organization
-	Policies []string
+	User      *github.User
+	Org       *github.Organization
+	Policies  []string
+	TeamNames []string
 }

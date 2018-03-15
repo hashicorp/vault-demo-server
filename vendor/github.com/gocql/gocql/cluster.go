@@ -6,66 +6,47 @@ package gocql
 
 import (
 	"errors"
+	"net"
 	"time"
 )
 
 // PoolConfig configures the connection pool used by the driver, it defaults to
-// using a round robbin host selection policy and a round robbin connection selection
+// using a round-robin host selection policy and a round-robin connection selection
 // policy for each host.
 type PoolConfig struct {
 	// HostSelectionPolicy sets the policy for selecting which host to use for a
 	// given query (default: RoundRobinHostPolicy())
 	HostSelectionPolicy HostSelectionPolicy
-
-	// ConnSelectionPolicy sets the policy factory for selecting a connection to use for
-	// each host for a query (default: RoundRobinConnPolicy())
-	ConnSelectionPolicy func() ConnSelectionPolicy
 }
 
 func (p PoolConfig) buildPool(session *Session) *policyConnPool {
-	hostSelection := p.HostSelectionPolicy
-	if hostSelection == nil {
-		hostSelection = RoundRobinHostPolicy()
-	}
-
-	connSelection := p.ConnSelectionPolicy
-	if connSelection == nil {
-		connSelection = RoundRobinConnPolicy()
-	}
-
-	return newPolicyConnPool(session, hostSelection, connSelection)
-}
-
-type DiscoveryConfig struct {
-	// If not empty will filter all discoverred hosts to a single Data Centre (default: "")
-	DcFilter string
-	// If not empty will filter all discoverred hosts to a single Rack (default: "")
-	RackFilter string
-	// ignored
-	Sleep time.Duration
-}
-
-func (d DiscoveryConfig) matchFilter(host *HostInfo) bool {
-	if d.DcFilter != "" && d.DcFilter != host.DataCenter() {
-		return false
-	}
-
-	if d.RackFilter != "" && d.RackFilter != host.Rack() {
-		return false
-	}
-
-	return true
+	return newPolicyConnPool(session)
 }
 
 // ClusterConfig is a struct to configure the default cluster implementation
-// of gocoql. It has a varity of attributes that can be used to modify the
-// behavior to fit the most common use cases. Applications that requre a
+// of gocql. It has a variety of attributes that can be used to modify the
+// behavior to fit the most common use cases. Applications that require a
 // different setup must implement their own cluster.
 type ClusterConfig struct {
-	Hosts             []string          // addresses for the initial connections
-	CQLVersion        string            // CQL version (default: 3.0.0)
-	ProtoVersion      int               // version of the native protocol (default: 2)
+	// addresses for the initial connections. It is recommended to use the value set in
+	// the Cassandra config for broadcast_address or listen_address, an IP address not
+	// a domain name. This is because events from Cassandra will use the configured IP
+	// address, which is used to index connected hosts. If the domain name specified
+	// resolves to more than 1 IP address then the driver may connect multiple times to
+	// the same host, and will not mark the node being down or up from events.
+	Hosts      []string
+	CQLVersion string // CQL version (default: 3.0.0)
+
+	// ProtoVersion sets the version of the native protocol to use, this will
+	// enable features in the driver for specific protocol versions, generally this
+	// should be set to a known version (2,3,4) for the cluster being connected to.
+	//
+	// If it is 0 or unset (the default) then the driver will attempt to discover the
+	// highest supported protocol for the cluster. In clusters with nodes of different
+	// versions the protocol selected is not defined (ie, it can be any of the supported in the cluster)
+	ProtoVersion      int
 	Timeout           time.Duration     // connection timeout (default: 600ms)
+	ConnectTimeout    time.Duration     // initial connection timeout, used during initial dial to server (default: 600ms)
 	Port              int               // port (default: 9042)
 	Keyspace          string            // initial keyspace (optional)
 	NumConns          int               // number of connections per host (default: 2)
@@ -84,16 +65,21 @@ type ClusterConfig struct {
 	// configuration of host selection and connection selection policies.
 	PoolConfig PoolConfig
 
-	Discovery DiscoveryConfig
+	// If not zero, gocql attempt to reconnect known DOWN nodes in every ReconnectInterval.
+	ReconnectInterval time.Duration
 
 	// The maximum amount of time to wait for schema agreement in a cluster after
 	// receiving a schema change frame. (deault: 60s)
 	MaxWaitSchemaAgreement time.Duration
 
-	// HostFilter will filter all incoming events for host, any which dont pass
+	// HostFilter will filter all incoming events for host, any which don't pass
 	// the filter will be ignored. If set will take precedence over any options set
 	// via Discovery
 	HostFilter HostFilter
+
+	// AddressTranslator will translate addresses found on peer discovery and/or
+	// node change events.
+	AddressTranslator AddressTranslator
 
 	// If IgnorePeerAddr is true and the address in system.peers does not match
 	// the supplied host by either initial hosts or discovered via events then the
@@ -121,17 +107,41 @@ type ClusterConfig struct {
 		DisableSchemaEvents bool
 	}
 
+	// DisableSkipMetadata will override the internal result metadata cache so that the driver does not
+	// send skip_metadata for queries, this means that the result will always contain
+	// the metadata to parse the rows and will not reuse the metadata from the prepared
+	// statement.
+	//
+	// See https://issues.apache.org/jira/browse/CASSANDRA-10786
+	DisableSkipMetadata bool
+
+	// QueryObserver will set the provided query observer on all queries created from this session.
+	// Use it to collect metrics / stats from queries by providing an implementation of QueryObserver.
+	QueryObserver QueryObserver
+
+	// BatchObserver will set the provided batch observer on all queries created from this session.
+	// Use it to collect metrics / stats from batche queries by providing an implementation of BatchObserver.
+	BatchObserver BatchObserver
+
 	// internal config for testing
 	disableControlConn bool
 }
 
 // NewCluster generates a new config for the default cluster implementation.
+//
+// The supplied hosts are used to initially connect to the cluster then the rest of
+// the ring will be automatically discovered. It is recommended to use the value set in
+// the Cassandra config for broadcast_address or listen_address, an IP address not
+// a domain name. This is because events from Cassandra will use the configured IP
+// address, which is used to index connected hosts. If the domain name specified
+// resolves to more than 1 IP address then the driver may connect multiple times to
+// the same host, and will not mark the node being down or up from events.
 func NewCluster(hosts ...string) *ClusterConfig {
 	cfg := &ClusterConfig{
 		Hosts:                  hosts,
 		CQLVersion:             "3.0.0",
-		ProtoVersion:           2,
 		Timeout:                600 * time.Millisecond,
+		ConnectTimeout:         600 * time.Millisecond,
 		Port:                   9042,
 		NumConns:               2,
 		Consistency:            Quorum,
@@ -140,6 +150,7 @@ func NewCluster(hosts ...string) *ClusterConfig {
 		PageSize:               5000,
 		DefaultTimestamp:       true,
 		MaxWaitSchemaAgreement: 60 * time.Second,
+		ReconnectInterval:      60 * time.Second,
 	}
 	return cfg
 }
@@ -148,6 +159,25 @@ func NewCluster(hosts ...string) *ClusterConfig {
 // session object that can be used to interact with the database.
 func (cfg *ClusterConfig) CreateSession() (*Session, error) {
 	return NewSession(*cfg)
+}
+
+// translateAddressPort is a helper method that will use the given AddressTranslator
+// if defined, to translate the given address and port into a possibly new address
+// and port, If no AddressTranslator or if an error occurs, the given address and
+// port will be returned.
+func (cfg *ClusterConfig) translateAddressPort(addr net.IP, port int) (net.IP, int) {
+	if cfg.AddressTranslator == nil || len(addr) == 0 {
+		return addr, port
+	}
+	newAddr, newPort := cfg.AddressTranslator.Translate(addr, port)
+	if gocqlDebug {
+		Logger.Printf("gocql: translating address '%v:%d' to '%v:%d'", addr, port, newAddr, newPort)
+	}
+	return newAddr, newPort
+}
+
+func (cfg *ClusterConfig) filterHost(host *HostInfo) bool {
+	return !(cfg.HostFilter == nil || cfg.HostFilter.Accept(host))
 }
 
 var (

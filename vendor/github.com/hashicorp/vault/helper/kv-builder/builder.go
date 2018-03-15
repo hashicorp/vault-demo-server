@@ -2,12 +2,14 @@ package kvbuilder
 
 import (
 	"bytes"
-	"encoding/json"
 	"fmt"
 	"io"
 	"io/ioutil"
 	"os"
 	"strings"
+
+	"github.com/hashicorp/vault/helper/jsonutil"
+	"github.com/mitchellh/mapstructure"
 )
 
 // Builder is a struct to build a key/value mapping based on a list
@@ -46,33 +48,36 @@ func (b *Builder) add(raw string) error {
 		return nil
 	}
 
-	// If the arg is exactly "-", then we need to read from stdin
-	// and merge the results into the resulting structure.
-	if raw == "-" {
-		if b.Stdin == nil {
-			return fmt.Errorf("stdin is not supported")
-		}
-		if b.stdin {
-			return fmt.Errorf("stdin already consumed")
-		}
-
-		b.stdin = true
-		return b.addReader(b.Stdin)
-	}
-
-	// If the arg begins with "@" then we need to read a file directly
-	if raw[0] == '@' {
-		f, err := os.Open(raw[1:])
-		if err != nil {
-			return err
-		}
-		defer f.Close()
-
-		return b.addReader(f)
-	}
-
 	// Split into key/value
 	parts := strings.SplitN(raw, "=", 2)
+
+	// If the arg is exactly "-", then we need to read from stdin
+	// and merge the results into the resulting structure.
+	if len(parts) == 1 {
+		if raw == "-" {
+			if b.Stdin == nil {
+				return fmt.Errorf("stdin is not supported")
+			}
+			if b.stdin {
+				return fmt.Errorf("stdin already consumed")
+			}
+
+			b.stdin = true
+			return b.addReader(b.Stdin)
+		}
+
+		// If the arg begins with "@" then we need to read a file directly
+		if raw[0] == '@' {
+			f, err := os.Open(raw[1:])
+			if err != nil {
+				return err
+			}
+			defer f.Close()
+
+			return b.addReader(f)
+		}
+	}
+
 	if len(parts) != 2 {
 		return fmt.Errorf("format must be key=value")
 	}
@@ -106,11 +111,21 @@ func (b *Builder) add(raw string) error {
 		}
 	}
 
+	// Repeated keys will be converted into a slice
+	if existingValue, ok := b.result[key]; ok {
+		var sliceValue []interface{}
+		if err := mapstructure.WeakDecode(existingValue, &sliceValue); err != nil {
+			return err
+		}
+		sliceValue = append(sliceValue, value)
+		b.result[key] = sliceValue
+		return nil
+	}
+
 	b.result[key] = value
 	return nil
 }
 
 func (b *Builder) addReader(r io.Reader) error {
-	dec := json.NewDecoder(r)
-	return dec.Decode(&b.result)
+	return jsonutil.DecodeJSONFromReader(r, &b.result)
 }
