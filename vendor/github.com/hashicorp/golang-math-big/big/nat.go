@@ -5,16 +5,10 @@
 // This file implements unsigned multi-precision integers (natural
 // numbers). They are the building blocks for the implementation
 // of signed integers, rationals, and floating-point numbers.
-//
-// Caution: This implementation relies on the function "alias"
-//          which assumes that (nat) slice capacities are never
-//          changed (no 3-operand slice expressions). If that
-//          changes, alias needs to be updated for correctness.
 
 package big
 
 import (
-	"encoding/binary"
 	"math/bits"
 	"math/rand"
 	"sync"
@@ -357,10 +351,6 @@ func karatsuba(z, x, y nat) {
 }
 
 // alias reports whether x and y share the same base array.
-// Note: alias assumes that the capacity of underlying arrays
-//       is never changed for nat values; i.e. that there are
-//       no 3-operand slice expressions in this code (or worse,
-//       reflect-based operations to the same effect).
 func alias(x, y nat) bool {
 	return cap(x) > 0 && cap(y) > 0 && &x[0:cap(x)][cap(x)-1] == &y[0:cap(y)][cap(y)-1]
 }
@@ -1218,32 +1208,25 @@ func (z nat) bytes(buf []byte) (i int) {
 	return
 }
 
-// bigEndianWord returns the contents of buf interpreted as a big-endian encoded Word value.
-func bigEndianWord(buf []byte) Word {
-	if _W == 64 {
-		return Word(binary.BigEndian.Uint64(buf))
-	} else { // Explicit else is required to get inlining. See #23521
-		return Word(binary.BigEndian.Uint32(buf))
-	}
-}
-
 // setBytes interprets buf as the bytes of a big-endian unsigned
 // integer, sets z to that value, and returns z.
 func (z nat) setBytes(buf []byte) nat {
 	z = z.make((len(buf) + _S - 1) / _S)
 
-	i := len(buf)
-	for k := 0; i >= _S; k++ {
-		z[k] = bigEndianWord(buf[i-_S : i])
-		i -= _S
-	}
-	if i > 0 {
-		var d Word
-		for s := uint(0); i > 0; s += 8 {
-			d |= Word(buf[i-1]) << s
-			i--
+	k := 0
+	s := uint(0)
+	var d Word
+	for i := len(buf); i > 0; i-- {
+		d |= Word(buf[i-1]) << s
+		if s += 8; s == _S*8 {
+			z[k] = d
+			k++
+			s = 0
+			d = 0
 		}
-		z[len(z)-1] = d
+	}
+	if k < len(z) {
+		z[k] = d
 	}
 
 	return z.norm()
