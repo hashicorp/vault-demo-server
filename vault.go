@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"fmt"
+	"log"
 	"math"
 	"math/rand"
 	"net"
@@ -87,6 +88,8 @@ func (v *client) CLI(raw []string) (int, string, string) {
 		Stdout:  stdout,
 		Stderr:  stderr,
 	}
+
+	log.Printf("[DEBUG] %s: running command: %v", runOpts.Address, args)
 
 	exitCode := command.RunCustom(raw, runOpts)
 	return exitCode, stdout.String(), stderr.String()
