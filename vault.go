@@ -89,7 +89,7 @@ func (v *client) CLI(raw []string) (int, string, string) {
 		Stderr:  stderr,
 	}
 
-	log.Printf("[DEBUG] %s: running command: %v", runOpts.Address, args)
+	log.Printf("[DEBUG] %s: running command: %v", runOpts.Address, raw)
 
 	exitCode := command.RunCustom(raw, runOpts)
 	return exitCode, stdout.String(), stderr.String()
