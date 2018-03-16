@@ -1303,28 +1303,28 @@
 			"revisionTime": "2018-03-16T14:30:05Z"
 		},
 		{
-			"checksumSHA1": "6BJU/MSjx0BVZ2L0kZwU5nUJVCk=",
+			"checksumSHA1": "j5fgl4QCFFB3eaNAWHRcTDF+1Q8=",
 			"path": "github.com/hashicorp/vault/command",
-			"revision": "d7a46c631c413aceeb7bf9f2d51d178222147d43",
-			"revisionTime": "2018-03-16T14:30:05Z"
+			"revision": "130168c447dacf60aa2ca1b186157edf7f3de49f",
+			"revisionTime": "2018-03-16T15:31:00Z"
 		},
 		{
 			"checksumSHA1": "93JSUqQQCAapgopAacRAzkgOf78=",
 			"path": "github.com/hashicorp/vault/command/config",
-			"revision": "d7a46c631c413aceeb7bf9f2d51d178222147d43",
-			"revisionTime": "2018-03-16T14:30:05Z"
+			"revision": "130168c447dacf60aa2ca1b186157edf7f3de49f",
+			"revisionTime": "2018-03-16T15:31:00Z"
 		},
 		{
 			"checksumSHA1": "YW0SEyN1eCxwE3PpJaVtmTXWjio=",
 			"path": "github.com/hashicorp/vault/command/server",
-			"revision": "d7a46c631c413aceeb7bf9f2d51d178222147d43",
-			"revisionTime": "2018-03-16T14:30:05Z"
+			"revision": "130168c447dacf60aa2ca1b186157edf7f3de49f",
+			"revisionTime": "2018-03-16T15:31:00Z"
 		},
 		{
 			"checksumSHA1": "6ExIL9N9QzNfRfUlefGhfmjJ/+g=",
 			"path": "github.com/hashicorp/vault/command/token",
-			"revision": "d7a46c631c413aceeb7bf9f2d51d178222147d43",
-			"revisionTime": "2018-03-16T14:30:05Z"
+			"revision": "130168c447dacf60aa2ca1b186157edf7f3de49f",
+			"revisionTime": "2018-03-16T15:31:00Z"
 		},
 		{
 			"checksumSHA1": "yiaddfk3ii3kZDPCtH1lCnAi/f8=",

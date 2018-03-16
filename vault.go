@@ -14,6 +14,7 @@ import (
 	"github.com/hashicorp/vault/builtin/logical/totp"
 	"github.com/hashicorp/vault/builtin/logical/transit"
 	"github.com/hashicorp/vault/command"
+	vaulttoken "github.com/hashicorp/vault/command/token"
 	vaulthttp "github.com/hashicorp/vault/http"
 	"github.com/hashicorp/vault/logical"
 	"github.com/hashicorp/vault/physical/inmem"
@@ -80,11 +81,14 @@ func (v *client) CLI(raw []string) (int, string, string) {
 	args := []string{
 		"-address",
 		fmt.Sprintf("http://%s", v.listener.Addr()),
-		"-token",
-		v.id,
 	}
 
-	exitCode := command.Run(args)
+	baseCmdTemplate := &command.BaseCommand{}
+	baseCmdTemplate.SetTokenHelper(&vaulttoken.ExternalTokenHelper{
+		BinaryPath: fmt.Sprintf("%s -token=%s", selfPath, v.id),
+	})
+
+	exitCode := command.RunCustom(args, baseCmdTemplate)
 	return exitCode, stdout.String(), stderr.String()
 }
 
