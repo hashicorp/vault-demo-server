@@ -1303,10 +1303,10 @@
 			"revisionTime": "2018-03-16T14:30:05Z"
 		},
 		{
-			"checksumSHA1": "j5fgl4QCFFB3eaNAWHRcTDF+1Q8=",
+			"checksumSHA1": "2tUjZBOlEbCY72hL4HbJRRM1FR4=",
 			"path": "github.com/hashicorp/vault/command",
-			"revision": "130168c447dacf60aa2ca1b186157edf7f3de49f",
-			"revisionTime": "2018-03-16T15:31:00Z"
+			"revision": "2b936ef8b3c6b8eb0d2a78f378759f385278816a",
+			"revisionTime": "2018-03-16T16:31:26Z"
 		},
 		{
 			"checksumSHA1": "93JSUqQQCAapgopAacRAzkgOf78=",

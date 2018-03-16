@@ -76,19 +76,23 @@ func NewClient() (*client, error) {
 // CLI is used to execute a CLI command on the local Vault. The address
 // to the in-memory Vault will be prepended to the args.
 func (v *client) CLI(raw []string) (int, string, string) {
-	var stdout, stderr bytes.Buffer
+	stdout := new(bytes.Buffer)
+	stderr := new(bytes.Buffer)
 
 	args := []string{
 		"-address",
 		fmt.Sprintf("http://%s", v.listener.Addr()),
 	}
 
-	baseCmdTemplate := &command.BaseCommand{}
-	baseCmdTemplate.SetTokenHelper(&vaulttoken.ExternalTokenHelper{
-		BinaryPath: fmt.Sprintf("%s -token=%s", selfPath, v.id),
-	})
+	runOpts := &command.RunOptions{
+		TokenHelper: &vaulttoken.ExternalTokenHelper{
+			BinaryPath: fmt.Sprintf("%s -token=%s", selfPath, v.id),
+		},
+		Stdout: stdout,
+		Stderr: stderr,
+	}
 
-	exitCode := command.RunCustom(args, baseCmdTemplate)
+	exitCode := command.RunCustom(args, runOpts)
 	return exitCode, stdout.String(), stderr.String()
 }
 
