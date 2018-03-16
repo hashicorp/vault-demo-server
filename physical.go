@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"sync"
 
@@ -21,7 +22,7 @@ type Physical struct {
 	once    sync.Once
 }
 
-func (p *Physical) Put(e *physical.Entry) error {
+func (p *Physical) Put(ctx context.Context, e *physical.Entry) error {
 	p.lock.Lock()
 	defer p.lock.Unlock()
 	p.once.Do(p.init)
@@ -35,7 +36,7 @@ func (p *Physical) Put(e *physical.Entry) error {
 	}
 
 	// Nope, write it
-	if err := p.Backend.Put(e); err != nil {
+	if err := p.Backend.Put(ctx, e); err != nil {
 		return err
 	}
 
@@ -45,13 +46,13 @@ func (p *Physical) Put(e *physical.Entry) error {
 	return nil
 }
 
-func (p *Physical) Delete(key string) error {
+func (p *Physical) Delete(ctx context.Context, key string) error {
 	p.lock.Lock()
 	defer p.lock.Unlock()
 	p.once.Do(p.init)
 
 	// Nope, write it
-	if err := p.Backend.Delete(key); err != nil {
+	if err := p.Backend.Delete(ctx, key); err != nil {
 		return err
 	}
 

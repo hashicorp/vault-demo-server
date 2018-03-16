@@ -11,14 +11,13 @@ import (
 	"sync"
 
 	"github.com/hashicorp/vault/builtin/logical/pki"
+	"github.com/hashicorp/vault/builtin/logical/totp"
 	"github.com/hashicorp/vault/builtin/logical/transit"
-	vaultcli "github.com/hashicorp/vault/cli"
-	vaultcommand "github.com/hashicorp/vault/command"
+	"github.com/hashicorp/vault/command"
 	vaulthttp "github.com/hashicorp/vault/http"
 	"github.com/hashicorp/vault/logical"
-	"github.com/hashicorp/vault/physical"
+	"github.com/hashicorp/vault/physical/inmem"
 	"github.com/hashicorp/vault/vault"
-	"github.com/mitchellh/cli"
 )
 
 // client represents a single vault instance: a single websocket connection.
@@ -34,19 +33,25 @@ type client struct {
 
 // NewClient creates a new in-memory vault.
 func NewClient() (*client, error) {
+	inm, err := inmem.NewInmem(nil, nil)
+	if err != nil {
+		return nil, err
+	}
+
 	// Create the core, sealed and in-memory
 	core, err := vault.NewCore(&vault.CoreConfig{
 		// Heroku doesn't support mlock syscall
 		DisableMlock: true,
 
 		Physical: &Physical{
-			Backend: physical.NewInmem(),
+			Backend: inm,
 			Limit:   64000,
 		},
 
 		LogicalBackends: map[string]logical.Factory{
 			"transit": transit.Factory,
 			"pki":     pki.Factory,
+			"totp":    totp.Factory,
 		},
 	})
 	if err != nil {
@@ -72,20 +77,14 @@ func NewClient() (*client, error) {
 func (v *client) CLI(raw []string) (int, string, string) {
 	var stdout, stderr bytes.Buffer
 
-	// Build our CLI commands
-	commands := vaultcli.Commands(&vaultcommand.Meta{
-		Ui: &cli.BasicUi{
-			Writer:      &stdout,
-			ErrorWriter: &stderr,
-		},
+	args := []string{
+		"-address",
+		fmt.Sprintf("http://%s", v.listener.Addr()),
+		"-token",
+		v.id,
+	}
 
-		ForceAddress: fmt.Sprintf("http://%s", v.listener.Addr()),
-		ForceConfig: &vaultcommand.Config{
-			TokenHelper: fmt.Sprintf("%s -token=%s", selfPath, v.id),
-		},
-	})
-
-	exitCode := vaultcli.RunCustom(raw, commands)
+	exitCode := command.Run(args)
 	return exitCode, stdout.String(), stderr.String()
 }
 
