@@ -15,7 +15,10 @@
 package ochttp
 
 import (
+	"bufio"
 	"context"
+	"errors"
+	"net"
 	"net/http"
 	"strconv"
 	"sync"
@@ -38,9 +41,6 @@ import (
 //
 // Incoming propagation mechanism is determined by the given HTTP propagators.
 type Handler struct {
-	// NoStats may be set to disable recording of stats.
-	NoStats bool
-
 	// Propagation defines how traces are propagated. If unspecified,
 	// B3 propagation will be used.
 	Propagation propagation.HTTPFormat
@@ -50,19 +50,24 @@ type Handler struct {
 
 	// StartOptions are applied to the span started by this Handler around each
 	// request.
+	//
+	// StartOptions.SpanKind will always be set to trace.SpanKindServer
+	// for spans started by this transport.
 	StartOptions trace.StartOptions
+
+	// IsPublicEndpoint should be set to true for publicly accessible HTTP(S)
+	// servers. If true, any trace metadata set on the incoming request will
+	// be added as a linked trace instead of being added as a parent of the
+	// current trace.
+	IsPublicEndpoint bool
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	var end func()
-	r, end = h.startTrace(w, r)
-	defer end()
-	if !h.NoStats {
-		var end func()
-		w, end = h.startStats(w, r)
-		defer end()
-	}
-
+	var traceEnd, statsEnd func()
+	r, traceEnd = h.startTrace(w, r)
+	defer traceEnd()
+	w, statsEnd = h.startStats(w, r)
+	defer statsEnd()
 	handler := h.Handler
 	if handler == nil {
 		handler = http.DefaultServeMux
@@ -71,21 +76,37 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) startTrace(w http.ResponseWriter, r *http.Request) (*http.Request, func()) {
-	name := spanNameFromURL("Recv", r.URL)
-	p := h.Propagation
-	if p == nil {
-		p = defaultFormat
-	}
+	name := spanNameFromURL(r.URL)
 	ctx := r.Context()
 	var span *trace.Span
-	if sc, ok := p.SpanContextFromRequest(r); ok {
-		span = trace.NewSpanWithRemoteParent(name, sc, h.StartOptions)
+	sc, ok := h.extractSpanContext(r)
+	if ok && !h.IsPublicEndpoint {
+		ctx, span = trace.StartSpanWithRemoteParent(ctx, name, sc,
+			trace.WithSampler(h.StartOptions.Sampler),
+			trace.WithSpanKind(trace.SpanKindServer))
 	} else {
-		span = trace.NewSpan(name, nil, h.StartOptions)
+		ctx, span = trace.StartSpan(ctx, name,
+			trace.WithSampler(h.StartOptions.Sampler),
+			trace.WithSpanKind(trace.SpanKindServer),
+		)
+		if ok {
+			span.AddLink(trace.Link{
+				TraceID:    sc.TraceID,
+				SpanID:     sc.SpanID,
+				Type:       trace.LinkTypeChild,
+				Attributes: nil,
+			})
+		}
 	}
-	ctx = trace.WithSpan(ctx, span)
-	span.SetAttributes(requestAttrs(r)...)
-	return r.WithContext(trace.WithSpan(r.Context(), span)), span.End
+	span.AddAttributes(requestAttrs(r)...)
+	return r.WithContext(ctx), span.End
+}
+
+func (h *Handler) extractSpanContext(r *http.Request) (trace.SpanContext, bool) {
+	if h.Propagation == nil {
+		return defaultFormat.SpanContextFromRequest(r)
+	}
+	return h.Propagation.SpanContextFromRequest(r)
 }
 
 func (h *Handler) startStats(w http.ResponseWriter, r *http.Request) (http.ResponseWriter, func()) {
@@ -114,17 +135,53 @@ type trackingResponseWriter struct {
 	respSize   int64
 	start      time.Time
 	statusCode int
+	statusLine string
 	endOnce    sync.Once
 	writer     http.ResponseWriter
 }
 
+// Compile time assertions for widely used net/http interfaces
+var _ http.CloseNotifier = (*trackingResponseWriter)(nil)
+var _ http.Flusher = (*trackingResponseWriter)(nil)
+var _ http.Hijacker = (*trackingResponseWriter)(nil)
+var _ http.Pusher = (*trackingResponseWriter)(nil)
 var _ http.ResponseWriter = (*trackingResponseWriter)(nil)
+
+var errHijackerUnimplemented = errors.New("ResponseWriter does not implement http.Hijacker")
+
+func (t *trackingResponseWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	hj, ok := t.writer.(http.Hijacker)
+	if !ok {
+		return nil, nil, errHijackerUnimplemented
+	}
+	return hj.Hijack()
+}
+
+func (t *trackingResponseWriter) CloseNotify() <-chan bool {
+	cn, ok := t.writer.(http.CloseNotifier)
+	if !ok {
+		return nil
+	}
+	return cn.CloseNotify()
+}
+
+func (t *trackingResponseWriter) Push(target string, opts *http.PushOptions) error {
+	pusher, ok := t.writer.(http.Pusher)
+	if !ok {
+		return http.ErrNotSupported
+	}
+	return pusher.Push(target, opts)
+}
 
 func (t *trackingResponseWriter) end() {
 	t.endOnce.Do(func() {
 		if t.statusCode == 0 {
 			t.statusCode = 200
 		}
+
+		span := trace.FromContext(t.ctx)
+		span.SetStatus(TraceStatus(t.statusCode, t.statusLine))
+
 		m := []stats.Measurement{
 			ServerLatency.M(float64(time.Since(t.start)) / float64(time.Millisecond)),
 			ServerResponseBytes.M(t.respSize),
@@ -150,6 +207,7 @@ func (t *trackingResponseWriter) Write(data []byte) (int, error) {
 func (t *trackingResponseWriter) WriteHeader(statusCode int) {
 	t.writer.WriteHeader(statusCode)
 	t.statusCode = statusCode
+	t.statusLine = http.StatusText(t.statusCode)
 }
 
 func (t *trackingResponseWriter) Flush() {

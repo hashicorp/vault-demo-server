@@ -34,9 +34,11 @@ const traceContextKey = "grpc-trace-bin"
 // It returns ctx with the new trace span added and a serialization of the
 // SpanContext added to the outgoing gRPC metadata.
 func (c *ClientHandler) traceTagRPC(ctx context.Context, rti *stats.RPCTagInfo) context.Context {
-	name := "Sent" + strings.Replace(rti.FullMethodName, "/", ".", -1)
-	span := trace.NewSpan(name, trace.FromContext(ctx), c.StartOptions) // span is ended by traceHandleRPC
-	ctx = trace.WithSpan(ctx, span)
+	name := strings.TrimPrefix(rti.FullMethodName, "/")
+	name = strings.Replace(name, "/", ".", -1)
+	ctx, span := trace.StartSpan(ctx, name,
+		trace.WithSampler(c.StartOptions.Sampler),
+		trace.WithSpanKind(trace.SpanKindClient)) // span is ended by traceHandleRPC
 	traceContextBinary := propagation.Binary(span.SpanContext())
 	return metadata.AppendToOutgoingContext(ctx, traceContextKey, string(traceContextBinary))
 }
@@ -49,7 +51,8 @@ func (c *ClientHandler) traceTagRPC(ctx context.Context, rti *stats.RPCTagInfo) 
 // It returns ctx, with the new trace span added.
 func (s *ServerHandler) traceTagRPC(ctx context.Context, rti *stats.RPCTagInfo) context.Context {
 	md, _ := metadata.FromIncomingContext(ctx)
-	name := "Recv" + strings.Replace(rti.FullMethodName, "/", ".", -1)
+	name := strings.TrimPrefix(rti.FullMethodName, "/")
+	name = strings.Replace(name, "/", ".", -1)
 	traceContext := md[traceContextKey]
 	var (
 		parent     trace.SpanContext
@@ -62,15 +65,20 @@ func (s *ServerHandler) traceTagRPC(ctx context.Context, rti *stats.RPCTagInfo) 
 		traceContextBinary := []byte(traceContext[0])
 		parent, haveParent = propagation.FromBinary(traceContextBinary)
 		if haveParent && !s.IsPublicEndpoint {
-			span := trace.NewSpanWithRemoteParent(name, parent, s.StartOptions)
-			return trace.WithSpan(ctx, span)
+			ctx, _ := trace.StartSpanWithRemoteParent(ctx, name, parent,
+				trace.WithSpanKind(trace.SpanKindServer),
+				trace.WithSampler(s.StartOptions.Sampler),
+			)
+			return ctx
 		}
 	}
-	span := trace.NewSpan(name, nil, s.StartOptions)
+	ctx, span := trace.StartSpan(ctx, name,
+		trace.WithSpanKind(trace.SpanKindServer),
+		trace.WithSampler(s.StartOptions.Sampler))
 	if haveParent {
 		span.AddLink(trace.Link{TraceID: parent.TraceID, SpanID: parent.SpanID, Type: trace.LinkTypeChild})
 	}
-	return trace.WithSpan(ctx, span)
+	return ctx
 }
 
 func traceHandleRPC(ctx context.Context, rs stats.RPCStats) {
@@ -78,7 +86,7 @@ func traceHandleRPC(ctx context.Context, rs stats.RPCStats) {
 	// TODO: compressed and uncompressed sizes are not populated in every message.
 	switch rs := rs.(type) {
 	case *stats.Begin:
-		span.SetAttributes(
+		span.AddAttributes(
 			trace.BoolAttribute("Client", rs.Client),
 			trace.BoolAttribute("FailFast", rs.FailFast))
 	case *stats.InPayload:

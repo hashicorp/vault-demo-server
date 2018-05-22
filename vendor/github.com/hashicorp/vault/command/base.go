@@ -43,6 +43,8 @@ type BaseCommand struct {
 	flagFormat string
 	flagField  string
 
+	flagMFA []string
+
 	tokenHelper token.TokenHelper
 
 	client *api.Client
@@ -108,6 +110,8 @@ func (c *BaseCommand) Client() (*api.Client, error) {
 	if token != "" {
 		client.SetToken(token)
 	}
+
+	client.SetMFACreds(c.flagMFA)
 
 	c.client = client
 
@@ -192,7 +196,7 @@ func (c *BaseCommand) flagSet(bit FlagSetBit) *FlagSets {
 				Completion: complete.PredictFiles("*"),
 				Usage: "Path on the local disk to a single PEM-encoded CA " +
 					"certificate to verify the Vault server's SSL certificate. This " +
-					"takes precendence over -ca-path.",
+					"takes precedence over -ca-path.",
 			})
 
 			f.StringVar(&StringVar{
@@ -257,6 +261,15 @@ func (c *BaseCommand) flagSet(bit FlagSetBit) *FlagSets {
 					"The TTL is specified as a numeric string with suffix like \"30s\" " +
 					"or \"5m\".",
 			})
+
+			f.StringSliceVar(&StringSliceVar{
+				Name:       "mfa",
+				Target:     &c.flagMFA,
+				Default:    nil,
+				EnvVar:     api.EnvVaultMFA,
+				Completion: complete.PredictAnything,
+				Usage:      "Supply MFA credentials as part of X-Vault-MFA header.",
+			})
 		}
 
 		if bit&(FlagSetOutputField|FlagSetOutputFormat) != 0 {
@@ -271,7 +284,7 @@ func (c *BaseCommand) flagSet(bit FlagSetBit) *FlagSets {
 					Usage: "Print only the field with the given name. Specifying " +
 						"this option will take precedence over other formatting " +
 						"directives. The result will not have a trailing newline " +
-						"making it idea for piping to other processes.",
+						"making it ideal for piping to other processes.",
 				})
 			}
 

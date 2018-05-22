@@ -18,7 +18,6 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"sync"
 
 	"go.opencensus.io/plugin/ochttp/propagation/b3"
 	"go.opencensus.io/trace"
@@ -51,57 +50,57 @@ type traceTransport struct {
 // The created span can follow a parent span, if a parent is presented in
 // the request's context.
 func (t *traceTransport) RoundTrip(req *http.Request) (*http.Response, error) {
-	name := spanNameFromURL("Sent", req.URL)
+	name := spanNameFromURL(req.URL)
 	// TODO(jbd): Discuss whether we want to prefix
 	// outgoing requests with Sent.
-	parent := trace.FromContext(req.Context())
-	span := trace.NewSpan(name, parent, t.startOptions)
-	req = req.WithContext(trace.WithSpan(req.Context(), span))
+	_, span := trace.StartSpan(req.Context(), name,
+		trace.WithSampler(t.startOptions.Sampler),
+		trace.WithSpanKind(trace.SpanKindClient))
 
+	req = req.WithContext(trace.WithSpan(req.Context(), span))
 	if t.format != nil {
 		t.format.SpanContextToRequest(span.SpanContext(), req)
 	}
 
-	span.SetAttributes(requestAttrs(req)...)
+	span.AddAttributes(requestAttrs(req)...)
 	resp, err := t.base.RoundTrip(req)
 	if err != nil {
-		span.SetStatus(trace.Status{Code: 2, Message: err.Error()})
+		span.SetStatus(trace.Status{Code: trace.StatusCodeUnknown, Message: err.Error()})
 		span.End()
 		return resp, err
 	}
 
-	span.SetAttributes(responseAttrs(resp)...)
+	span.AddAttributes(responseAttrs(resp)...)
+	span.SetStatus(TraceStatus(resp.StatusCode, resp.Status))
 
 	// span.End() will be invoked after
 	// a read from resp.Body returns io.EOF or when
 	// resp.Body.Close() is invoked.
-	resp.Body = &spanEndBody{rc: resp.Body, span: span}
+	resp.Body = &bodyTracker{rc: resp.Body, span: span}
 	return resp, err
 }
 
-// spanEndBody wraps a response.Body and invokes
+// bodyTracker wraps a response.Body and invokes
 // trace.EndSpan on encountering io.EOF on reading
 // the body of the original response.
-type spanEndBody struct {
+type bodyTracker struct {
 	rc   io.ReadCloser
 	span *trace.Span
-
-	endSpanOnce sync.Once
 }
 
-var _ io.ReadCloser = (*spanEndBody)(nil)
+var _ io.ReadCloser = (*bodyTracker)(nil)
 
-func (seb *spanEndBody) Read(b []byte) (int, error) {
-	n, err := seb.rc.Read(b)
+func (bt *bodyTracker) Read(b []byte) (int, error) {
+	n, err := bt.rc.Read(b)
 
 	switch err {
 	case nil:
 		return n, nil
 	case io.EOF:
-		seb.endSpan()
+		bt.span.End()
 	default:
 		// For all other errors, set the span status
-		seb.span.SetStatus(trace.Status{
+		bt.span.SetStatus(trace.Status{
 			// Code 2 is the error code for Internal server error.
 			Code:    2,
 			Message: err.Error(),
@@ -110,19 +109,12 @@ func (seb *spanEndBody) Read(b []byte) (int, error) {
 	return n, err
 }
 
-// endSpan invokes trace.EndSpan exactly once
-func (seb *spanEndBody) endSpan() {
-	seb.endSpanOnce.Do(func() {
-		seb.span.End()
-	})
-}
-
-func (seb *spanEndBody) Close() error {
+func (bt *bodyTracker) Close() error {
 	// Invoking endSpan on Close will help catch the cases
 	// in which a read returned a non-nil error, we set the
 	// span status but didn't end the span.
-	seb.endSpan()
-	return seb.rc.Close()
+	bt.span.End()
+	return bt.rc.Close()
 }
 
 // CancelRequest cancels an in-flight request by closing its connection.
@@ -135,13 +127,8 @@ func (t *traceTransport) CancelRequest(req *http.Request) {
 	}
 }
 
-func spanNameFromURL(prefix string, u *url.URL) string {
-	host := u.Hostname()
-	port := ":" + u.Port()
-	if port == ":" || port == ":80" || port == ":443" {
-		port = ""
-	}
-	return prefix + "." + host + port + u.Path
+func spanNameFromURL(u *url.URL) string {
+	return u.Path
 }
 
 func requestAttrs(r *http.Request) []trace.Attribute {
@@ -157,4 +144,56 @@ func responseAttrs(resp *http.Response) []trace.Attribute {
 	return []trace.Attribute{
 		trace.Int64Attribute(StatusCodeAttribute, int64(resp.StatusCode)),
 	}
+}
+
+// HTTPStatusToTraceStatus converts the HTTP status code to a trace.Status that
+// represents the outcome as closely as possible.
+func TraceStatus(httpStatusCode int, statusLine string) trace.Status {
+	var code int32
+	if httpStatusCode < 200 || httpStatusCode >= 400 {
+		code = trace.StatusCodeUnknown
+	}
+	switch httpStatusCode {
+	case 499:
+		code = trace.StatusCodeCancelled
+	case http.StatusBadRequest:
+		code = trace.StatusCodeInvalidArgument
+	case http.StatusGatewayTimeout:
+		code = trace.StatusCodeDeadlineExceeded
+	case http.StatusNotFound:
+		code = trace.StatusCodeNotFound
+	case http.StatusForbidden:
+		code = trace.StatusCodePermissionDenied
+	case http.StatusUnauthorized: // 401 is actually unauthenticated.
+		code = trace.StatusCodeUnauthenticated
+	case http.StatusTooManyRequests:
+		code = trace.StatusCodeResourceExhausted
+	case http.StatusNotImplemented:
+		code = trace.StatusCodeUnimplemented
+	case http.StatusServiceUnavailable:
+		code = trace.StatusCodeUnavailable
+	case http.StatusOK:
+		code = trace.StatusCodeOK
+	}
+	return trace.Status{Code: code, Message: codeToStr[code]}
+}
+
+var codeToStr = map[int32]string{
+	trace.StatusCodeOK:                 `"OK"`,
+	trace.StatusCodeCancelled:          `"CANCELLED"`,
+	trace.StatusCodeUnknown:            `"UNKNOWN"`,
+	trace.StatusCodeInvalidArgument:    `"INVALID_ARGUMENT"`,
+	trace.StatusCodeDeadlineExceeded:   `"DEADLINE_EXCEEDED"`,
+	trace.StatusCodeNotFound:           `"NOT_FOUND"`,
+	trace.StatusCodeAlreadyExists:      `"ALREADY_EXISTS"`,
+	trace.StatusCodePermissionDenied:   `"PERMISSION_DENIED"`,
+	trace.StatusCodeResourceExhausted:  `"RESOURCE_EXHAUSTED"`,
+	trace.StatusCodeFailedPrecondition: `"FAILED_PRECONDITION"`,
+	trace.StatusCodeAborted:            `"ABORTED"`,
+	trace.StatusCodeOutOfRange:         `"OUT_OF_RANGE"`,
+	trace.StatusCodeUnimplemented:      `"UNIMPLEMENTED"`,
+	trace.StatusCodeInternal:           `"INTERNAL"`,
+	trace.StatusCodeUnavailable:        `"UNAVAILABLE"`,
+	trace.StatusCodeDataLoss:           `"DATA_LOSS"`,
+	trace.StatusCodeUnauthenticated:    `"UNAUTHENTICATED"`,
 }

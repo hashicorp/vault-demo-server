@@ -90,8 +90,12 @@ service Lease {
   // LeaseRevoke revokes a lease. All keys attached to the lease will expire and be deleted.
   rpc LeaseRevoke(LeaseRevokeRequest) returns (LeaseRevokeResponse) {
       option (google.api.http) = {
-        post: "/v3/kv/lease/revoke"
+        post: "/v3/lease/revoke"
         body: "*"
+        additional_bindings {
+            post: "/v3/kv/lease/revoke"
+            body: "*"
+        }
     };
   }
 
@@ -107,16 +111,24 @@ service Lease {
   // LeaseTimeToLive retrieves lease information.
   rpc LeaseTimeToLive(LeaseTimeToLiveRequest) returns (LeaseTimeToLiveResponse) {
       option (google.api.http) = {
-        post: "/v3/kv/lease/timetolive"
+        post: "/v3/lease/timetolive"
         body: "*"
+        additional_bindings {
+            post: "/v3/kv/lease/timetolive"
+            body: "*"
+        }
     };
   }
 
   // LeaseLeases lists all existing leases.
   rpc LeaseLeases(LeaseLeasesRequest) returns (LeaseLeasesResponse) {
       option (google.api.http) = {
-        post: "/v3/kv/lease/leases"
+        post: "/v3/lease/leases"
         body: "*"
+        additional_bindings {
+            post: "/v3/kv/lease/leases"
+            body: "*"
+        }
     };
   }
 }
@@ -180,9 +192,12 @@ service Maintenance {
     };
   }
 
-  // Hash computes the hash of the KV's backend.
-  // This is designed for testing; do not use this in production when there
-  // are ongoing transactions.
+  // Hash computes the hash of whole backend keyspace,
+  // including key, lease, and other buckets in storage.
+  // This is designed for testing ONLY!
+  // Do not rely on this in production with ongoing transactions,
+  // since Hash operation does not hold MVCC locks.
+  // Use "HashKV" API instead for "key" bucket consistency checks.
   rpc Hash(HashRequest) returns (HashResponse) {
       option (google.api.http) = {
         post: "/v3/maintenance/hash"
@@ -191,6 +206,7 @@ service Maintenance {
   }
 
   // HashKV computes the hash of all MVCC keys up to a given revision.
+  // It only iterates "key" bucket in backend storage.
   rpc HashKV(HashKVRequest) returns (HashKVResponse) {
       option (google.api.http) = {
         post: "/v3/maintenance/hash"
@@ -645,14 +661,17 @@ message WatchRequest {
 message WatchCreateRequest {
   // key is the key to register for watching.
   bytes key = 1;
+
   // range_end is the end of the range [key, range_end) to watch. If range_end is not given,
   // only the key argument is watched. If range_end is equal to '\0', all keys greater than
   // or equal to the key argument are watched.
   // If the range_end is one bit larger than the given key,
   // then all keys with the prefix (the given key) will be watched.
   bytes range_end = 2;
+
   // start_revision is an optional revision to watch from (inclusive). No start_revision is "now".
   int64 start_revision = 3;
+
   // progress_notify is set so that the etcd server will periodically send a WatchResponse with
   // no events to the new watcher if there are no recent events. It is useful when clients
   // wish to recover a disconnected watcher starting from a recent known revision.
@@ -660,11 +679,12 @@ message WatchCreateRequest {
   bool progress_notify = 4;
 
   enum FilterType {
-  // filter out put event.
-  NOPUT = 0;
-  // filter out delete event.
-  NODELETE = 1;
+    // filter out put event.
+    NOPUT = 0;
+    // filter out delete event.
+    NODELETE = 1;
   }
+
   // filters filter the events at server side before it sends back to the watcher.
   repeated FilterType filters = 5;
 
@@ -678,6 +698,9 @@ message WatchCreateRequest {
   // watchers on the same stream. Creating a watcher with an ID already in
   // use on the stream will cause an error to be returned.
   int64 watch_id = 7;
+
+  // fragment enables splitting large revisions into multiple watch responses.
+  bool fragment = 8;
 }
 
 message WatchCancelRequest {
@@ -689,14 +712,17 @@ message WatchResponse {
   ResponseHeader header = 1;
   // watch_id is the ID of the watcher that corresponds to the response.
   int64 watch_id = 2;
+
   // created is set to true if the response is for a create watch request.
   // The client should record the watch_id and expect to receive events for
   // the created watcher from the same stream.
   // All events sent to the created watcher will attach with the same watch_id.
   bool created = 3;
+
   // canceled is set to true if the response is for a cancel watch request.
   // No further events will be sent to the canceled watcher.
   bool canceled = 4;
+
   // compact_revision is set to the minimum index if a watcher tries to watch
   // at a compacted index.
   //
@@ -709,6 +735,9 @@ message WatchResponse {
 
   // cancel_reason indicates the reason for canceling the watcher.
   string cancel_reason = 6;
+
+  // framgment is true if large watch response was split over multiple responses.
+  bool fragment = 7;
 
   repeated mvccpb.Event events = 11;
 }

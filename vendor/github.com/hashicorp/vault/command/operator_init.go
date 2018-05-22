@@ -125,7 +125,7 @@ func (c *OperatorInitCommand) Flags() *FlagSets {
 			"public GPG keys OR a comma-separated list of Keybase usernames using " +
 			"the format \"keybase:<username>\". When supplied, the generated " +
 			"unseal keys will be encrypted and base64-encoded in the order " +
-			"specified in this list. The number of entires must match -key-shares, " +
+			"specified in this list. The number of entries must match -key-shares, " +
 			"unless -store-shares are used.",
 	})
 
@@ -383,7 +383,7 @@ func (c *OperatorInitCommand) consulAuto(client *api.Client, req *api.InitReques
 		// Update the client to connect to this Vault server
 		client.SetAddress(vaultAddr)
 
-		// Let the client know that initialization is perfomed on the
+		// Let the client know that initialization is performed on the
 		// discovered node.
 		c.UI.Output(wrapAtLength(fmt.Sprintf(
 			"Discovered an initialized Vault node at %q with Consul service name "+

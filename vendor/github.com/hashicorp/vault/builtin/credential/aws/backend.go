@@ -46,7 +46,7 @@ type backend struct {
 	// tidy the blacklist and whitelist entries.
 	tidyCooldownPeriod time.Duration
 
-	// nextTidyTime holds the time at which the periodic func should initiatite
+	// nextTidyTime holds the time at which the periodic func should initiate
 	// the tidy operations. This is set by the periodicFunc based on the value
 	// of tidyCooldownPeriod.
 	nextTidyTime time.Time
@@ -227,7 +227,7 @@ func (b *backend) resolveArnToRealUniqueId(ctx context.Context, s logical.Storag
 	// Sigh
 	region := getAnyRegionForAwsPartition(entity.Partition)
 	if region == nil {
-		return "", fmt.Errorf("Unable to resolve partition %q to a region", entity.Partition)
+		return "", fmt.Errorf("unable to resolve partition %q to a region", entity.Partition)
 	}
 	iamClient, err := b.clientIAM(ctx, s, region.ID(), entity.AccountNumber)
 	if err != nil {

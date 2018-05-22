@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/golang/protobuf/ptypes"
+	"github.com/hashicorp/errwrap"
 	memdb "github.com/hashicorp/go-memdb"
 	"github.com/hashicorp/vault/helper/identity"
 	"github.com/hashicorp/vault/logical"
@@ -229,9 +230,13 @@ func (i *IdentityStore) handleAliasUpdateCommon(req *logical.Request, d *framewo
 		return logical.ErrorResponse("missing mount_accessor"), nil
 	}
 
-	mountValidationResp := i.validateMountAccessorFunc(mountAccessor)
+	mountValidationResp := i.core.router.validateMountByAccessor(mountAccessor)
 	if mountValidationResp == nil {
 		return logical.ErrorResponse(fmt.Sprintf("invalid mount accessor %q", mountAccessor)), nil
+	}
+
+	if mountValidationResp.MountLocal {
+		return logical.ErrorResponse(fmt.Sprintf("mount_accessor %q is of a local mount", mountAccessor)), nil
 	}
 
 	// Get alias metadata
@@ -407,7 +412,7 @@ func (i *IdentityStore) pathAliasIDList() framework.OperationFunc {
 		ws := memdb.NewWatchSet()
 		iter, err := i.MemDBAliases(ws, false)
 		if err != nil {
-			return nil, fmt.Errorf("failed to fetch iterator for aliases in memdb: %v", err)
+			return nil, errwrap.Wrapf("failed to fetch iterator for aliases in memdb: {{err}}", err)
 		}
 
 		var aliasIDs []string
@@ -433,7 +438,7 @@ var aliasHelp = map[string][2]string{
 		"",
 	},
 	"alias-id-list": {
-		"List all the entity IDs.",
+		"List all the alias IDs.",
 		"",
 	},
 }

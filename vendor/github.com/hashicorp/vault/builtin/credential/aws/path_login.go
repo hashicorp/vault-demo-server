@@ -21,6 +21,7 @@ import (
 	"github.com/aws/aws-sdk-go/service/ec2"
 	"github.com/aws/aws-sdk-go/service/iam"
 	"github.com/fullsailor/pkcs7"
+	"github.com/hashicorp/errwrap"
 	"github.com/hashicorp/go-cleanhttp"
 	"github.com/hashicorp/go-uuid"
 	"github.com/hashicorp/vault/helper/jsonutil"
@@ -167,7 +168,7 @@ func (b *backend) validateInstance(ctx context.Context, s logical.Storage, insta
 		},
 	})
 	if err != nil {
-		return nil, fmt.Errorf("error fetching description for instance ID %q: %q\n", instanceID, err)
+		return nil, errwrap.Wrapf(fmt.Sprintf("error fetching description for instance ID %q: {{err}}", instanceID), err)
 	}
 	if status == nil {
 		return nil, fmt.Errorf("nil output from describe instances")
@@ -310,7 +311,7 @@ func (b *backend) parseIdentityDocument(ctx context.Context, s logical.Storage, 
 	// Parse the signature from asn1 format into a struct
 	pkcs7Data, err := pkcs7.Parse(pkcs7BER.Bytes)
 	if err != nil {
-		return nil, fmt.Errorf("failed to parse the BER encoded PKCS#7 signature: %v\n", err)
+		return nil, errwrap.Wrapf("failed to parse the BER encoded PKCS#7 signature: {{err}}", err)
 	}
 
 	// Get the public certificates that are used to verify the signature.
@@ -445,8 +446,24 @@ func (b *backend) verifyInstanceMeetsRoleRequirements(ctx context.Context,
 		}
 		iamInstanceProfileARN := *instance.IamInstanceProfile.Arn
 		matchesInstanceProfile := false
+		// NOTE: Can't use strutil.StrListContainsGlob. A * is a perfectly valid character in the "path" component
+		// of an ARN. See, e.g., https://docs.aws.amazon.com/IAM/latest/APIReference/API_CreateInstanceProfile.html :
+		// The path allows strings "containing any ASCII character from the ! (\u0021) thru the DEL character
+		// (\u007F), including most punctuation characters, digits, and upper and lowercased letters."
+		// So, e.g., arn:aws:iam::123456789012:instance-profile/Some*Path/MyProfileName is a perfectly valid instance
+		// profile ARN, and it wouldn't be correct to expand the * in the middle as a wildcard.
+		// If a user wants to match an IAM instance profile arn beginning with arn:aws:iam::123456789012:instance-profile/foo*
+		// then bound_iam_instance_profile_arn would need to be arn:aws:iam::123456789012:instance-profile/foo**
+		// Wanting to exactly match an ARN that has a * at the end is not a valid use case. The * is only valid in the
+		// path; it's not valid in the name. That means no valid ARN can ever end with a *. For example,
+		// arn:aws:iam::123456789012:instance-profile/Foo* is NOT valid as an instance profile ARN, so no valid instance
+		// profile ARN could ever equal that value.
 		for _, boundInstanceProfileARN := range roleEntry.BoundIamInstanceProfileARNs {
-			if strings.HasPrefix(iamInstanceProfileARN, boundInstanceProfileARN) {
+			switch {
+			case strings.HasSuffix(boundInstanceProfileARN, "*") && strings.HasPrefix(iamInstanceProfileARN, boundInstanceProfileARN[:len(boundInstanceProfileARN)-1]):
+				matchesInstanceProfile = true
+				break
+			case iamInstanceProfileARN == boundInstanceProfileARN:
 				matchesInstanceProfile = true
 				break
 			}
@@ -478,19 +495,19 @@ func (b *backend) verifyInstanceMeetsRoleRequirements(ctx context.Context,
 		iamInstanceProfileEntity, err := parseIamArn(iamInstanceProfileARN)
 
 		if err != nil {
-			return nil, fmt.Errorf("failed to parse IAM instance profile ARN %q; error: %v", iamInstanceProfileARN, err)
+			return nil, errwrap.Wrapf(fmt.Sprintf("failed to parse IAM instance profile ARN %q: {{err}}", iamInstanceProfileARN), err)
 		}
 
 		// Use instance profile ARN to fetch the associated role ARN
 		iamClient, err := b.clientIAM(ctx, s, identityDoc.Region, identityDoc.AccountID)
 		if err != nil {
-			return nil, fmt.Errorf("could not fetch IAM client: %v", err)
+			return nil, errwrap.Wrapf("could not fetch IAM client: {{err}}", err)
 		} else if iamClient == nil {
 			return nil, fmt.Errorf("received a nil iamClient")
 		}
 		iamRoleARN, err := b.instanceIamRoleARN(iamClient, iamInstanceProfileEntity.FriendlyName)
 		if err != nil {
-			return nil, fmt.Errorf("IAM role ARN could not be fetched: %v", err)
+			return nil, errwrap.Wrapf("IAM role ARN could not be fetched: {{err}}", err)
 		}
 		if iamRoleARN == "" {
 			return nil, fmt.Errorf("IAM role ARN could not be fetched")
@@ -498,7 +515,12 @@ func (b *backend) verifyInstanceMeetsRoleRequirements(ctx context.Context,
 
 		matchesInstanceRoleARN := false
 		for _, boundIamRoleARN := range roleEntry.BoundIamRoleARNs {
-			if strings.HasPrefix(iamRoleARN, boundIamRoleARN) {
+			switch {
+			// as with boundInstanceProfileARN, can't use strutil.StrListContainsGlob because * can validly exist in the middle of an ARN
+			case strings.HasSuffix(boundIamRoleARN, "*") && strings.HasPrefix(iamRoleARN, boundIamRoleARN[:len(boundIamRoleARN)-1]):
+				matchesInstanceRoleARN = true
+				break
+			case iamRoleARN == boundIamRoleARN:
 				matchesInstanceRoleARN = true
 				break
 			}
@@ -788,6 +810,7 @@ func (b *backend) pathLoginUpdateEc2(ctx context.Context, req *logical.Request, 
 			LeaseOptions: logical.LeaseOptions{
 				Renewable: true,
 				TTL:       roleEntry.TTL,
+				MaxTTL:    shortestMaxTTL,
 			},
 			Alias: &logical.Alias{
 				Name: identityDocParsed.InstanceID,
@@ -805,22 +828,12 @@ func (b *backend) pathLoginUpdateEc2(ctx context.Context, req *logical.Request, 
 		resp.Auth.Metadata["nonce"] = clientNonce
 	}
 
-	// In this case no role value was set so pull in what will be assigned by
-	// Core for comparison
-	if resp.Auth.TTL == 0 {
-		resp.Auth.TTL = b.System().DefaultLeaseTTL()
-	}
-	if resp.Auth.TTL > shortestMaxTTL {
-		resp.Auth.TTL = shortestMaxTTL
-		resp.AddWarning(fmt.Sprintf("Effective TTL of '%s' exceeded the effective max_ttl of '%s'; TTL value is capped accordingly", resp.Auth.TTL, shortestMaxTTL))
-	}
-
 	return resp, nil
 }
 
 // handleRoleTagLogin is used to fetch the role tag of the instance and
 // verifies it to be correct.  Then the policies for the login request will be
-// set off of the role tag, if certain creteria satisfies.
+// set off of the role tag, if certain criteria satisfies.
 func (b *backend) handleRoleTagLogin(ctx context.Context, s logical.Storage, roleName string, roleEntry *awsRoleEntry, instance *ec2.Instance) (*roleTagLoginResponse, error) {
 	if roleEntry == nil {
 		return nil, fmt.Errorf("nil role entry")
@@ -866,7 +879,7 @@ func (b *backend) handleRoleTagLogin(ctx context.Context, s logical.Storage, rol
 
 	// If instance_id was set on the role tag, check if the same instance is attempting to login
 	if rTag.InstanceID != "" && rTag.InstanceID != *instance.InstanceId {
-		return nil, fmt.Errorf("role tag is being used by an unauthorized instance.")
+		return nil, fmt.Errorf("role tag is being used by an unauthorized instance")
 	}
 
 	// Check if the role tag is blacklisted
@@ -947,7 +960,7 @@ func (b *backend) pathLoginRenewIam(ctx context.Context, req *logical.Request, d
 			}
 			_, err := b.validateInstance(ctx, req.Storage, instanceID, instanceRegion, req.Auth.Metadata["account_id"])
 			if err != nil {
-				return nil, fmt.Errorf("failed to verify instance ID %q: %v", instanceID, err)
+				return nil, errwrap.Wrapf(fmt.Sprintf("failed to verify instance ID %q: {{err}}", instanceID), err)
 			}
 		} else {
 			return nil, fmt.Errorf("unrecognized entity_type in metadata: %q", roleEntry.InferredEntityType)
@@ -978,11 +991,11 @@ func (b *backend) pathLoginRenewIam(ctx context.Context, req *logical.Request, d
 			if fullArn == "" {
 				entity, err := parseIamArn(canonicalArn)
 				if err != nil {
-					return nil, fmt.Errorf("error parsing ARN %q: %v", canonicalArn, err)
+					return nil, errwrap.Wrapf(fmt.Sprintf("error parsing ARN %q: {{err}}", canonicalArn), err)
 				}
 				fullArn, err = b.fullArn(ctx, entity, req.Storage)
 				if err != nil {
-					return nil, fmt.Errorf("error looking up full ARN of entity %v: %v", entity, err)
+					return nil, errwrap.Wrapf(fmt.Sprintf("error looking up full ARN of entity %v: {{err}}", entity), err)
 				}
 				if fullArn == "" {
 					return nil, fmt.Errorf("got empty string back when looking up full ARN of entity %v", entity)
@@ -1004,17 +1017,11 @@ func (b *backend) pathLoginRenewIam(ctx context.Context, req *logical.Request, d
 		}
 	}
 
-	// If a period is provided, set that as part of resp.Auth.Period and return a
-	// response immediately. Let expiration manager handle renewal from there on.
-	if roleEntry.Period > time.Duration(0) {
-		resp := &logical.Response{
-			Auth: req.Auth,
-		}
-		resp.Auth.Period = roleEntry.Period
-		return resp, nil
-	}
-
-	return framework.LeaseExtend(roleEntry.TTL, roleEntry.MaxTTL, b.System())(ctx, req, data)
+	resp := &logical.Response{Auth: req.Auth}
+	resp.Auth.TTL = roleEntry.TTL
+	resp.Auth.MaxTTL = roleEntry.MaxTTL
+	resp.Auth.Period = roleEntry.Period
+	return resp, nil
 }
 
 func (b *backend) pathLoginRenewEc2(ctx context.Context, req *logical.Request, data *framework.FieldData) (*logical.Response, error) {
@@ -1039,7 +1046,7 @@ func (b *backend) pathLoginRenewEc2(ctx context.Context, req *logical.Request, d
 	// Cross check that the instance is still in 'running' state
 	_, err := b.validateInstance(ctx, req.Storage, instanceID, region, accountID)
 	if err != nil {
-		return nil, fmt.Errorf("failed to verify instance ID %q: %q", instanceID, err)
+		return nil, errwrap.Wrapf(fmt.Sprintf("failed to verify instance ID %q: {{err}}", instanceID), err)
 	}
 
 	storedIdentity, err := whitelistIdentityEntry(ctx, req.Storage, instanceID)
@@ -1094,17 +1101,11 @@ func (b *backend) pathLoginRenewEc2(ctx context.Context, req *logical.Request, d
 		return nil, err
 	}
 
-	// If a period is provided, set that as part of resp.Auth.Period and return a
-	// response immediately. Let expiration manager handle renewal from there on.
-	if roleEntry.Period > time.Duration(0) {
-		resp := &logical.Response{
-			Auth: req.Auth,
-		}
-		resp.Auth.Period = roleEntry.Period
-		return resp, nil
-	}
-
-	return framework.LeaseExtend(roleEntry.TTL, shortestMaxTTL, b.System())(ctx, req, data)
+	resp := &logical.Response{Auth: req.Auth}
+	resp.Auth.TTL = roleEntry.TTL
+	resp.Auth.MaxTTL = shortestMaxTTL
+	resp.Auth.Period = roleEntry.Period
+	return resp, nil
 }
 
 func (b *backend) pathLoginUpdateIam(ctx context.Context, req *logical.Request, data *framework.FieldData) (*logical.Response, error) {
@@ -1308,28 +1309,12 @@ func (b *backend) pathLoginUpdateIam(ctx context.Context, req *logical.Request, 
 			LeaseOptions: logical.LeaseOptions{
 				Renewable: true,
 				TTL:       roleEntry.TTL,
+				MaxTTL:    roleEntry.MaxTTL,
 			},
 			Alias: &logical.Alias{
 				Name: callerUniqueId,
 			},
 		},
-	}
-
-	if resp.Auth.TTL == 0 {
-		resp.Auth.TTL = b.System().DefaultLeaseTTL()
-	}
-	if roleEntry.MaxTTL > time.Duration(0) {
-		// Cap maxTTL to the sysview's max TTL
-		maxTTL := roleEntry.MaxTTL
-		if maxTTL > b.System().MaxLeaseTTL() {
-			maxTTL = b.System().MaxLeaseTTL()
-		}
-
-		// Cap TTL to MaxTTL
-		if resp.Auth.TTL > maxTTL {
-			resp.AddWarning(fmt.Sprintf("Effective TTL of '%s' exceeded the effective max_ttl of '%s'; TTL value is capped accordingly", resp.Auth.TTL, maxTTL))
-			resp.Auth.TTL = maxTTL
-		}
 	}
 
 	return resp, nil
@@ -1368,7 +1353,7 @@ func parseIamArn(iamArn string) (*iamEntity, error) {
 		return nil, fmt.Errorf("unrecognized arn: contains %d colon-separated parts, expected 6", len(fullParts))
 	}
 	if fullParts[0] != "arn" {
-		return nil, fmt.Errorf("unrecognized arn: does not begin with arn:")
+		return nil, fmt.Errorf("unrecognized arn: does not begin with \"arn:\"")
 	}
 	// normally aws, but could be aws-cn or aws-us-gov
 	entity.Partition = fullParts[1]
@@ -1411,12 +1396,12 @@ func validateVaultHeaderValue(headers http.Header, requestUrl *url.URL, required
 		}
 	}
 	if providedValue == "" {
-		return fmt.Errorf("didn't find %s", iamServerIdHeader)
+		return fmt.Errorf("missing header %q", iamServerIdHeader)
 	}
 
 	// NOT doing a constant time compare here since the value is NOT intended to be secret
 	if providedValue != requiredHeaderValue {
-		return fmt.Errorf("expected %s but got %s", requiredHeaderValue, providedValue)
+		return fmt.Errorf("expected %q but got %q", requiredHeaderValue, providedValue)
 	}
 
 	if authzHeaders, ok := headers["Authorization"]; ok {
@@ -1446,7 +1431,7 @@ func buildHttpRequest(method, endpoint string, parsedUrl *url.URL, body string, 
 	// The use cases we want to support, in order of increasing complexity, are:
 	// 1. All defaults (client assumes sts.amazonaws.com and server has no override)
 	// 2. Alternate STS regions: client wants to go to a specific region, in which case
-	//    Vault must be confiugred with that endpoint as well. The client's signed request
+	//    Vault must be configured with that endpoint as well. The client's signed request
 	//    will include a signature over what the client expects the Host header to be,
 	//    so we cannot change that and must match.
 	// 3. Alternate STS regions with a proxy that is transparent to Vault's clients.
@@ -1456,14 +1441,14 @@ func buildHttpRequest(method, endpoint string, parsedUrl *url.URL, body string, 
 	// It's also annoying because:
 	// 1. The AWS Sigv4 algorithm requires the Host header to be defined
 	// 2. Some of the official SDKs (at least botocore and aws-sdk-go) don't actually
-	//    incude an explicit Host header in the HTTP requests they generate, relying on
+	//    include an explicit Host header in the HTTP requests they generate, relying on
 	//    the underlying HTTP library to do that for them.
 	// 3. To get a validly signed request, the SDKs check if a Host header has been set
 	//    and, if not, add an inferred host header (based on the URI) to the internal
 	//    data structure used for calculating the signature, but never actually expose
 	//    that to clients. So then they just "hope" that the underlying library actually
 	//    adds the right Host header which was included in the signature calculation.
-	// We could either explicity require all Vault clients to explicitly add the Host header
+	// We could either explicitly require all Vault clients to explicitly add the Host header
 	// in the encoded request, or we could also implicitly infer it from the URI.
 	// We choose to support both -- allow you to explicitly set a Host header, but if not,
 	// infer one from the URI.
@@ -1510,7 +1495,7 @@ func parseIamRequestHeaders(headersB64 string) (http.Header, error) {
 	var headersDecoded map[string]interface{}
 	err = jsonutil.DecodeJSON(headersJson, &headersDecoded)
 	if err != nil {
-		return nil, fmt.Errorf("failed to JSON decode iam_request_headers %q: %v", headersJson, err)
+		return nil, errwrap.Wrapf(fmt.Sprintf("failed to JSON decode iam_request_headers %q: {{err}}", headersJson), err)
 	}
 	headers := make(http.Header)
 	for k, v := range headersDecoded {
@@ -1549,7 +1534,7 @@ func submitCallerIdentityRequest(method, endpoint string, parsedUrl *url.URL, bo
 	}
 	response, err := client.Do(request)
 	if err != nil {
-		return nil, fmt.Errorf("error making request: %v", err)
+		return nil, errwrap.Wrapf("error making request: {{err}}", err)
 	}
 	if response != nil {
 		defer response.Body.Close()
@@ -1633,7 +1618,7 @@ func (b *backend) fullArn(ctx context.Context, e *iamEntity, s logical.Storage) 
 	// Not assuming path is reliable for any entity types
 	client, err := b.clientIAM(ctx, s, getAnyRegionForAwsPartition(e.Partition).ID(), e.AccountNumber)
 	if err != nil {
-		return "", fmt.Errorf("error creating IAM client: %v", err)
+		return "", errwrap.Wrapf("error creating IAM client: {{err}}", err)
 	}
 
 	switch e.Type {
@@ -1643,7 +1628,7 @@ func (b *backend) fullArn(ctx context.Context, e *iamEntity, s logical.Storage) 
 		}
 		resp, err := client.GetUser(&input)
 		if err != nil {
-			return "", fmt.Errorf("error fetching user %q: %v", e.FriendlyName, err)
+			return "", errwrap.Wrapf(fmt.Sprintf("error fetching user %q: {{err}}", e.FriendlyName), err)
 		}
 		if resp == nil {
 			return "", fmt.Errorf("nil response from GetUser")
@@ -1657,7 +1642,7 @@ func (b *backend) fullArn(ctx context.Context, e *iamEntity, s logical.Storage) 
 		}
 		resp, err := client.GetRole(&input)
 		if err != nil {
-			return "", fmt.Errorf("error fetching role %q: %v", e.FriendlyName, err)
+			return "", errwrap.Wrapf(fmt.Sprintf("error fetching role %q: {{err}}", e.FriendlyName), err)
 		}
 		if resp == nil {
 			return "", fmt.Errorf("nil response form GetRole")
@@ -1685,7 +1670,7 @@ implemented based on that inferred type.
 
 An EC2 instance is authenticated using the PKCS#7 signature of the instance identity
 document and a client created nonce. This nonce should be unique and should be used by
-the instance for all future logins, unless 'disallow_reauthenitcation' option on the
+the instance for all future logins, unless 'disallow_reauthentication' option on the
 registered role is enabled, in which case client nonce is optional.
 
 First login attempt, creates a whitelist entry in Vault associating the instance to the nonce

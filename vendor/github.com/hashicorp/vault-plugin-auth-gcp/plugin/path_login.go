@@ -95,14 +95,11 @@ func (b *GcpAuthBackend) pathLoginRenew(ctx context.Context, req *logical.Reques
 		return nil, fmt.Errorf("unexpected role type '%s' for login renewal", role.RoleType)
 	}
 
-	// If 'Period' is set on the Role, the token should never expire.
-	if role.Period > 0 {
-		// Replenish the TTL with current role's Period.
-		req.Auth.TTL = role.Period
-		return &logical.Response{Auth: req.Auth}, nil
-	} else {
-		return framework.LeaseExtend(role.TTL, role.MaxTTL, b.System())(ctx, req, data)
-	}
+	resp := &logical.Response{Auth: req.Auth}
+	resp.Auth.Period = role.Period
+	resp.Auth.TTL = role.TTL
+	resp.Auth.MaxTTL = role.MaxTTL
+	return resp, nil
 }
 
 // gcpLoginInfo represents the data given to Vault for logging in using the IAM method.
@@ -317,22 +314,9 @@ func (b *GcpAuthBackend) pathIamLogin(ctx context.Context, req *logical.Request,
 			LeaseOptions: logical.LeaseOptions{
 				Renewable: true,
 				TTL:       role.TTL,
+				MaxTTL:    role.MaxTTL,
 			},
 		},
-	}
-
-	if role.MaxTTL > time.Duration(0) {
-		// Cap maxTTL to the sysview's max TTL
-		maxTTL := role.MaxTTL
-		if maxTTL > b.System().MaxLeaseTTL() {
-			maxTTL = b.System().MaxLeaseTTL()
-		}
-
-		// Cap TTL to MaxTTL
-		if resp.Auth.TTL > maxTTL {
-			resp.AddWarning(fmt.Sprintf("Effective TTL of '%s' exceeded the effective max_ttl of '%s'; TTL value is capped accordingly", (resp.Auth.TTL / time.Second), (maxTTL / time.Second)))
-			resp.Auth.TTL = maxTTL
-		}
 	}
 
 	return resp, nil
@@ -447,22 +431,9 @@ func (b *GcpAuthBackend) pathGceLogin(ctx context.Context, req *logical.Request,
 			LeaseOptions: logical.LeaseOptions{
 				Renewable: true,
 				TTL:       role.TTL,
+				MaxTTL:    role.MaxTTL,
 			},
 		},
-	}
-
-	if role.MaxTTL > time.Duration(0) {
-		// Cap maxTTL to the sysview's max TTL
-		maxTTL := role.MaxTTL
-		if maxTTL > b.System().MaxLeaseTTL() {
-			maxTTL = b.System().MaxLeaseTTL()
-		}
-
-		// Cap TTL to MaxTTL
-		if resp.Auth.TTL > maxTTL {
-			resp.AddWarning(fmt.Sprintf("Effective TTL of '%s' exceeded the effective max_ttl of '%s'; TTL value is capped accordingly", (resp.Auth.TTL / time.Second), (maxTTL / time.Second)))
-			resp.Auth.TTL = maxTTL
-		}
 	}
 
 	return resp, nil
@@ -533,27 +504,16 @@ func (b *GcpAuthBackend) authorizeGCEInstance(ctx context.Context, instance *com
 
 	// Verify that instance is in zone or region if given.
 	if len(role.BoundZone) > 0 {
-		var zone string
-		idx := strings.LastIndex(instance.Zone, "zones/")
-		if idx > 0 {
-			// Parse zone name from full zone self-link URL.
-			idx += len("zones/")
-			zone = instance.Zone[idx:len(instance.Zone)]
-		} else {
-			// Expect full zone name to be set as instance zone.
-			zone = instance.Zone
-		}
-
-		if zone != role.BoundZone {
-			return fmt.Errorf("instance is not in role zone '%s'", role.BoundZone)
+		if !compareResourceNameOrSelfLink(role.BoundZone, instance.Zone, "zones") {
+			return fmt.Errorf("instance zone %s is not role zone '%s'", instance.Zone, role.BoundZone)
 		}
 	} else if len(role.BoundRegion) > 0 {
 		zone, err := gceClient.Zones.Get(role.ProjectId, zone).Do()
 		if err != nil {
-			return fmt.Errorf("could not verify instance zone '%s' is available for project '%s': %v", role.ProjectId, zone, err)
+			return fmt.Errorf("could not verify instance zone '%s' is available for project '%s': %v", zone.Name, role.ProjectId, err)
 		}
-		if zone.Region != role.BoundRegion {
-			return fmt.Errorf("zone '%s' is not in region '%s'", zone.Name, zone.Region)
+		if !compareResourceNameOrSelfLink(role.BoundRegion, zone.Region, "regions") {
+			return fmt.Errorf("instance zone %s is not in role region '%s'", zone.Name, role.BoundRegion)
 		}
 	}
 
@@ -611,6 +571,17 @@ func (b *GcpAuthBackend) authorizeGCEInstance(ctx context.Context, instance *com
 	}
 
 	return nil
+}
+
+func compareResourceNameOrSelfLink(expected, actual, collectionId string) bool {
+	sep := fmt.Sprintf("%s/", collectionId)
+	if strings.Contains(expected, sep) {
+		return expected == actual
+	}
+
+	actTkns := strings.SplitAfter(actual, sep)
+	actualName := actTkns[len(actTkns)-1]
+	return expected == actualName
 }
 
 const pathLoginHelpSyn = `Authenticates Google Cloud Platform entities with Vault.`

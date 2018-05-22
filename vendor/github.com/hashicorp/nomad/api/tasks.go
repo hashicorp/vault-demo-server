@@ -92,7 +92,7 @@ type ReschedulePolicy struct {
 	Delay *time.Duration `mapstructure:"delay"`
 
 	// DelayFunction determines how the delay progressively changes on subsequent reschedule
-	// attempts. Valid values are "exponential", "linear", and "fibonacci".
+	// attempts. Valid values are "exponential", "constant", and "fibonacci".
 	DelayFunction *string `mapstructure:"delay_function"`
 
 	// MaxDelay is an upper bound on the delay.
@@ -103,6 +103,9 @@ type ReschedulePolicy struct {
 }
 
 func (r *ReschedulePolicy) Merge(rp *ReschedulePolicy) {
+	if rp == nil {
+		return
+	}
 	if rp.Interval != nil {
 		r.Interval = rp.Interval
 	}
@@ -123,6 +126,63 @@ func (r *ReschedulePolicy) Merge(rp *ReschedulePolicy) {
 	}
 }
 
+func (r *ReschedulePolicy) Canonicalize(jobType string) {
+	dp := NewDefaultReschedulePolicy(jobType)
+	if r.Interval == nil {
+		r.Interval = dp.Interval
+	}
+	if r.Attempts == nil {
+		r.Attempts = dp.Attempts
+	}
+	if r.Delay == nil {
+		r.Delay = dp.Delay
+	}
+	if r.DelayFunction == nil {
+		r.DelayFunction = dp.DelayFunction
+	}
+	if r.MaxDelay == nil {
+		r.MaxDelay = dp.MaxDelay
+	}
+	if r.Unlimited == nil {
+		r.Unlimited = dp.Unlimited
+	}
+}
+
+func NewDefaultReschedulePolicy(jobType string) *ReschedulePolicy {
+	var dp *ReschedulePolicy
+	switch jobType {
+	case "service":
+		dp = &ReschedulePolicy{
+			Attempts:      helper.IntToPtr(structs.DefaultServiceJobReschedulePolicy.Attempts),
+			Interval:      helper.TimeToPtr(structs.DefaultServiceJobReschedulePolicy.Interval),
+			Delay:         helper.TimeToPtr(structs.DefaultServiceJobReschedulePolicy.Delay),
+			DelayFunction: helper.StringToPtr(structs.DefaultServiceJobReschedulePolicy.DelayFunction),
+			MaxDelay:      helper.TimeToPtr(structs.DefaultServiceJobReschedulePolicy.MaxDelay),
+			Unlimited:     helper.BoolToPtr(structs.DefaultServiceJobReschedulePolicy.Unlimited),
+		}
+	case "batch":
+		dp = &ReschedulePolicy{
+			Attempts:      helper.IntToPtr(structs.DefaultBatchJobReschedulePolicy.Attempts),
+			Interval:      helper.TimeToPtr(structs.DefaultBatchJobReschedulePolicy.Interval),
+			Delay:         helper.TimeToPtr(structs.DefaultBatchJobReschedulePolicy.Delay),
+			DelayFunction: helper.StringToPtr(structs.DefaultBatchJobReschedulePolicy.DelayFunction),
+			MaxDelay:      helper.TimeToPtr(structs.DefaultBatchJobReschedulePolicy.MaxDelay),
+			Unlimited:     helper.BoolToPtr(structs.DefaultBatchJobReschedulePolicy.Unlimited),
+		}
+
+	case "system":
+		dp = &ReschedulePolicy{
+			Attempts:      helper.IntToPtr(0),
+			Interval:      helper.TimeToPtr(0),
+			Delay:         helper.TimeToPtr(0),
+			DelayFunction: helper.StringToPtr(""),
+			MaxDelay:      helper.TimeToPtr(0),
+			Unlimited:     helper.BoolToPtr(false),
+		}
+	}
+	return dp
+}
+
 func (r *ReschedulePolicy) Copy() *ReschedulePolicy {
 	if r == nil {
 		return nil
@@ -130,6 +190,16 @@ func (r *ReschedulePolicy) Copy() *ReschedulePolicy {
 	nrp := new(ReschedulePolicy)
 	*nrp = *r
 	return nrp
+}
+
+func (p *ReschedulePolicy) String() string {
+	if p == nil {
+		return ""
+	}
+	if *p.Unlimited {
+		return fmt.Sprintf("unlimited with %v delay, max_delay = %v", *p.DelayFunction, *p.MaxDelay)
+	}
+	return fmt.Sprintf("%v in %v with %v delay, max_delay = %v", *p.Attempts, *p.Interval, *p.DelayFunction, *p.MaxDelay)
 }
 
 // CheckRestart describes if and when a task should be restarted based on
@@ -216,6 +286,8 @@ type ServiceCheck struct {
 	Header        map[string][]string
 	Method        string
 	CheckRestart  *CheckRestart `mapstructure:"check_restart"`
+	GRPCService   string        `mapstructure:"grpc_service"`
+	GRPCUseTLS    bool          `mapstructure:"grpc_use_tls"`
 }
 
 // The Service model represents a Consul service definition
@@ -223,8 +295,9 @@ type Service struct {
 	Id           string
 	Name         string
 	Tags         []string
-	PortLabel    string `mapstructure:"port"`
-	AddressMode  string `mapstructure:"address_mode"`
+	CanaryTags   []string `mapstructure:"canary_tags"`
+	PortLabel    string   `mapstructure:"port"`
+	AddressMode  string   `mapstructure:"address_mode"`
 	Checks       []ServiceCheck
 	CheckRestart *CheckRestart `mapstructure:"check_restart"`
 }
@@ -274,6 +347,67 @@ func (e *EphemeralDisk) Canonicalize() {
 	}
 }
 
+// MigrateStrategy describes how allocations for a task group should be
+// migrated between nodes (eg when draining).
+type MigrateStrategy struct {
+	MaxParallel     *int           `mapstructure:"max_parallel"`
+	HealthCheck     *string        `mapstructure:"health_check"`
+	MinHealthyTime  *time.Duration `mapstructure:"min_healthy_time"`
+	HealthyDeadline *time.Duration `mapstructure:"healthy_deadline"`
+}
+
+func DefaultMigrateStrategy() *MigrateStrategy {
+	return &MigrateStrategy{
+		MaxParallel:     helper.IntToPtr(1),
+		HealthCheck:     helper.StringToPtr("checks"),
+		MinHealthyTime:  helper.TimeToPtr(10 * time.Second),
+		HealthyDeadline: helper.TimeToPtr(5 * time.Minute),
+	}
+}
+
+func (m *MigrateStrategy) Canonicalize() {
+	if m == nil {
+		return
+	}
+	defaults := DefaultMigrateStrategy()
+	if m.MaxParallel == nil {
+		m.MaxParallel = defaults.MaxParallel
+	}
+	if m.HealthCheck == nil {
+		m.HealthCheck = defaults.HealthCheck
+	}
+	if m.MinHealthyTime == nil {
+		m.MinHealthyTime = defaults.MinHealthyTime
+	}
+	if m.HealthyDeadline == nil {
+		m.HealthyDeadline = defaults.HealthyDeadline
+	}
+}
+
+func (m *MigrateStrategy) Merge(o *MigrateStrategy) {
+	if o.MaxParallel != nil {
+		m.MaxParallel = o.MaxParallel
+	}
+	if o.HealthCheck != nil {
+		m.HealthCheck = o.HealthCheck
+	}
+	if o.MinHealthyTime != nil {
+		m.MinHealthyTime = o.MinHealthyTime
+	}
+	if o.HealthyDeadline != nil {
+		m.HealthyDeadline = o.HealthyDeadline
+	}
+}
+
+func (m *MigrateStrategy) Copy() *MigrateStrategy {
+	if m == nil {
+		return nil
+	}
+	nm := new(MigrateStrategy)
+	*nm = *m
+	return nm
+}
+
 // TaskGroup is the unit of scheduling.
 type TaskGroup struct {
 	Name             *string
@@ -284,6 +418,7 @@ type TaskGroup struct {
 	ReschedulePolicy *ReschedulePolicy
 	EphemeralDisk    *EphemeralDisk
 	Update           *UpdateStrategy
+	Migrate          *MigrateStrategy
 	Meta             map[string]string
 }
 
@@ -336,39 +471,32 @@ func (g *TaskGroup) Canonicalize(job *Job) {
 		jobReschedule := job.Reschedule.Copy()
 		g.ReschedulePolicy = jobReschedule
 	}
+	// Only use default reschedule policy for non system jobs
+	if g.ReschedulePolicy == nil && *job.Type != "system" {
+		g.ReschedulePolicy = NewDefaultReschedulePolicy(*job.Type)
+	}
+	if g.ReschedulePolicy != nil {
+		g.ReschedulePolicy.Canonicalize(*job.Type)
+	}
+	// Merge the migrate strategy from the job
+	if jm, tm := job.Migrate != nil, g.Migrate != nil; jm && tm {
+		jobMigrate := job.Migrate.Copy()
+		jobMigrate.Merge(g.Migrate)
+		g.Migrate = jobMigrate
+	} else if jm {
+		jobMigrate := job.Migrate.Copy()
+		g.Migrate = jobMigrate
+	}
 
 	// Merge with default reschedule policy
-	var defaultReschedulePolicy *ReschedulePolicy
-	switch *job.Type {
-	case "service":
-		defaultReschedulePolicy = &ReschedulePolicy{
-			Attempts:      helper.IntToPtr(structs.DefaultServiceJobReschedulePolicy.Attempts),
-			Interval:      helper.TimeToPtr(structs.DefaultServiceJobReschedulePolicy.Interval),
-			Delay:         helper.TimeToPtr(structs.DefaultServiceJobReschedulePolicy.Delay),
-			DelayFunction: helper.StringToPtr(structs.DefaultServiceJobReschedulePolicy.DelayFunction),
-			MaxDelay:      helper.TimeToPtr(structs.DefaultServiceJobReschedulePolicy.MaxDelay),
-			Unlimited:     helper.BoolToPtr(structs.DefaultServiceJobReschedulePolicy.Unlimited),
+	if *job.Type == "service" {
+		defaultMigrateStrategy := &MigrateStrategy{}
+		defaultMigrateStrategy.Canonicalize()
+		if g.Migrate != nil {
+			defaultMigrateStrategy.Merge(g.Migrate)
 		}
-	case "batch":
-		defaultReschedulePolicy = &ReschedulePolicy{
-			Attempts:      helper.IntToPtr(structs.DefaultBatchJobReschedulePolicy.Attempts),
-			Interval:      helper.TimeToPtr(structs.DefaultBatchJobReschedulePolicy.Interval),
-			Delay:         helper.TimeToPtr(structs.DefaultBatchJobReschedulePolicy.Delay),
-			DelayFunction: helper.StringToPtr(structs.DefaultBatchJobReschedulePolicy.DelayFunction),
-			MaxDelay:      helper.TimeToPtr(structs.DefaultBatchJobReschedulePolicy.MaxDelay),
-			Unlimited:     helper.BoolToPtr(structs.DefaultBatchJobReschedulePolicy.Unlimited),
-		}
-	default:
-		defaultReschedulePolicy = &ReschedulePolicy{
-			Attempts: helper.IntToPtr(0),
-			Interval: helper.TimeToPtr(0 * time.Second),
-		}
+		g.Migrate = defaultMigrateStrategy
 	}
-
-	if g.ReschedulePolicy != nil {
-		defaultReschedulePolicy.Merge(g.ReschedulePolicy)
-	}
-	g.ReschedulePolicy = defaultReschedulePolicy
 
 	var defaultRestartPolicy *RestartPolicy
 	switch *job.Type {

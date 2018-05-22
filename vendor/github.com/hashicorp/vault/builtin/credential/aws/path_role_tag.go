@@ -341,7 +341,7 @@ func (b *backend) parseAndVerifyRoleTagValue(ctx context.Context, s logical.Stor
 				return nil, err
 			}
 		default:
-			return nil, fmt.Errorf("unrecognized item %s in tag", tagItem)
+			return nil, fmt.Errorf("unrecognized item %q in tag", tagItem)
 		}
 	}
 
@@ -354,7 +354,7 @@ func (b *backend) parseAndVerifyRoleTagValue(ctx context.Context, s logical.Stor
 		return nil, err
 	}
 	if roleEntry == nil {
-		return nil, fmt.Errorf("entry not found for %s", rTag.Role)
+		return nil, fmt.Errorf("entry not found for %q", rTag.Role)
 	}
 
 	// Create a HMAC of the plaintext value of role tag and compare it with the given value.
@@ -390,7 +390,7 @@ func createRoleTagNonce() (string, error) {
 	}
 }
 
-// Struct roleTag represents a role tag in a struc form.
+// Struct roleTag represents a role tag in a struct form.
 type roleTag struct {
 	Version                  string        `json:"version"`
 	InstanceID               string        `json:"instance_id"`
