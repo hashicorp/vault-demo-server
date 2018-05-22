@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"sync"
 
+	kv "github.com/hashicorp/vault-plugin-secrets-kv"
 	"github.com/hashicorp/vault/builtin/logical/pki"
 	"github.com/hashicorp/vault/builtin/logical/totp"
 	"github.com/hashicorp/vault/builtin/logical/transit"
@@ -54,6 +55,7 @@ func NewClient() (*client, error) {
 			"transit": transit.Factory,
 			"pki":     pki.Factory,
 			"totp":    totp.Factory,
+			"kv":      kv.Factory,
 		},
 	})
 	if err != nil {

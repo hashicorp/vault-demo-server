@@ -15,6 +15,7 @@ var token = flag.String("token", "", "token id (internal)")
 var selfPath string
 
 func main() {
+	os.Setenv("VAULT_INTERACTIVE_DEMO_SERVER", "true")
 	os.Exit(realMain())
 }
 
