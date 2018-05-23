@@ -1401,10 +1401,10 @@
 			"revisionTime": "2018-05-22T19:46:39Z"
 		},
 		{
-			"checksumSHA1": "Fzdmgx+Xe7N0lJkoO6qBZ2bgNUo=",
+			"checksumSHA1": "Xk66Tj5RmVH749piqPV9/SvSqyo=",
 			"path": "github.com/hashicorp/vault/command",
-			"revision": "7dd05ab2b8adebcfbabd9df62355c34f8744a10e",
-			"revisionTime": "2018-05-23T13:57:27Z"
+			"revision": "b104ad5c90cc370fef18e271560ff8a65d02cc57",
+			"revisionTime": "2018-05-23T20:45:17Z"
 		},
 		{
 			"checksumSHA1": "cYsW0ei8JxRNXy1ZHoHjYlBRDIQ=",
