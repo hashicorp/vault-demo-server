@@ -1851,10 +1851,10 @@
 			"revisionTime": "2018-05-22T19:46:39Z"
 		},
 		{
-			"checksumSHA1": "sTsKHE/oM+LB19NtH6J4kPd4SLU=",
+			"checksumSHA1": "BTM3V5H7TvWgnn9usblswCMoRFw=",
 			"path": "github.com/hashicorp/vault/vault",
-			"revision": "8011cfe7037b9cca8d6aab9fb0a62f54976e314f",
-			"revisionTime": "2018-05-22T19:46:39Z"
+			"revision": "1a9e7287df004ac6f1442b25d4431fb3ca68aeeb",
+			"revisionTime": "2018-05-22T21:52:28Z"
 		},
 		{
 			"checksumSHA1": "myN9OBTFDQ4duIxWHxOLeQBiLjs=",

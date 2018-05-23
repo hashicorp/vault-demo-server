@@ -16,6 +16,7 @@ var selfPath string
 
 func main() {
 	os.Setenv("VAULT_INTERACTIVE_DEMO_SERVER", "true")
+	os.Setenv("VAULT_FORMAT", "table")
 	os.Exit(realMain())
 }
 
