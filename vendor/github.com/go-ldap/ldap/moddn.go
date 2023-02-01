@@ -1,3 +1,6 @@
+// Copyright (c) HashiCorp, Inc.
+// SPDX-License-Identifier: MPL-2.0
+
 // Package ldap - moddn.go contains ModifyDN functionality
 //
 // https://tools.ietf.org/html/rfc4511

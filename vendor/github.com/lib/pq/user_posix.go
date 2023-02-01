@@ -1,3 +1,6 @@
+// Copyright (c) HashiCorp, Inc.
+// SPDX-License-Identifier: MPL-2.0
+
 // Package pq is a pure Go Postgres driver for the database/sql package.
 
 // +build darwin dragonfly freebsd linux nacl netbsd openbsd solaris rumprun

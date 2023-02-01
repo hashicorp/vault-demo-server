@@ -1,3 +1,6 @@
+// Copyright (c) HashiCorp, Inc.
+// SPDX-License-Identifier: MPL-2.0
+
 package config
 
 // Key for CheckBundleConfig options and CheckDetails info

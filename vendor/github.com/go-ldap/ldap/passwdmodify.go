@@ -1,3 +1,6 @@
+// Copyright (c) HashiCorp, Inc.
+// SPDX-License-Identifier: MPL-2.0
+
 // This file contains the password modify extended operation as specified in rfc 3062
 //
 // https://tools.ietf.org/html/rfc3062

@@ -1,3 +1,6 @@
+// Copyright (c) HashiCorp, Inc.
+// SPDX-License-Identifier: MPL-2.0
+
 // Package httpunix provides a HTTP transport (net/http.RoundTripper)
 // that uses Unix domain sockets instead of HTTP.
 //

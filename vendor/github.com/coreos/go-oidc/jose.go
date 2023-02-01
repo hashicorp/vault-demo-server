@@ -1,3 +1,6 @@
+// Copyright (c) HashiCorp, Inc.
+// SPDX-License-Identifier: MPL-2.0
+
 // +build !golint
 
 // Don't lint this file. We don't want to have to add a comment to each constant.

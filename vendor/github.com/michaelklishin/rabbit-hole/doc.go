@@ -1,3 +1,6 @@
+// Copyright (c) HashiCorp, Inc.
+// SPDX-License-Identifier: MPL-2.0
+
 /*
 Rabbit Hole is a Go client for the RabbitMQ HTTP API.
 

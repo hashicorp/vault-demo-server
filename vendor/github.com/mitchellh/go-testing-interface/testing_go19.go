@@ -1,3 +1,6 @@
+// Copyright (c) HashiCorp, Inc.
+// SPDX-License-Identifier: MPL-2.0
+
 // +build go1.9
 
 // NOTE: This is a temporary copy of testing.go for Go 1.9 with the addition

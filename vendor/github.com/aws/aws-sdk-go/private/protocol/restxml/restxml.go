@@ -1,3 +1,6 @@
+// Copyright (c) HashiCorp, Inc.
+// SPDX-License-Identifier: MPL-2.0
+
 // Package restxml provides RESTful XML serialization of AWS
 // requests and responses.
 package restxml

@@ -1,3 +1,6 @@
+// Copyright (c) HashiCorp, Inc.
+// SPDX-License-Identifier: MPL-2.0
+
 // assetfs allows packages to serve static content embedded
 // with the go-bindata tool with the standard net/http package.
 //

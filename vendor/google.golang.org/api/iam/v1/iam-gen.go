@@ -1,3 +1,6 @@
+// Copyright (c) HashiCorp, Inc.
+// SPDX-License-Identifier: MPL-2.0
+
 // Package iam provides access to the Identity and Access Management (IAM) API.
 //
 // See https://cloud.google.com/iam/

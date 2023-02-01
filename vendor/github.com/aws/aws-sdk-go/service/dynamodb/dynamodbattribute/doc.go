@@ -1,3 +1,6 @@
+// Copyright (c) HashiCorp, Inc.
+// SPDX-License-Identifier: MPL-2.0
+
 // Package dynamodbattribute provides marshaling and unmarshaling utilities to
 // convert between Go types and dynamodb.AttributeValues.
 //

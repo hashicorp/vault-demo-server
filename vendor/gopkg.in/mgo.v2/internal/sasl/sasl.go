@@ -1,3 +1,6 @@
+// Copyright (c) HashiCorp, Inc.
+// SPDX-License-Identifier: MPL-2.0
+
 // Package sasl is an implementation detail of the mgo package.
 //
 // This package is not meant to be used by itself.

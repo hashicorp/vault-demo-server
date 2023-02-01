@@ -1,3 +1,6 @@
+// Copyright (c) HashiCorp, Inc.
+// SPDX-License-Identifier: MPL-2.0
+
 // Package govalidator is package of validators and sanitizers for strings, structs and collections.
 package govalidator
 

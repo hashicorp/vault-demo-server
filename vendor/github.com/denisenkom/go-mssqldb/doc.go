@@ -1,3 +1,6 @@
+// Copyright (c) HashiCorp, Inc.
+// SPDX-License-Identifier: MPL-2.0
+
 // package mssql implements the TDS protocol used to connect to MS SQL Server (sqlserver)
 // database servers.
 //

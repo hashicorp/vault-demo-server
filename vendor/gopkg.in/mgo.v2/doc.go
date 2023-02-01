@@ -1,3 +1,6 @@
+// Copyright (c) HashiCorp, Inc.
+// SPDX-License-Identifier: MPL-2.0
+
 // Package mgo offers a rich MongoDB driver for Go.
 //
 // Details about the mgo project (pronounced as "mango") are found

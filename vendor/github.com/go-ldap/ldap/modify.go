@@ -1,3 +1,6 @@
+// Copyright (c) HashiCorp, Inc.
+// SPDX-License-Identifier: MPL-2.0
+
 // File contains Modify functionality
 //
 // https://tools.ietf.org/html/rfc4511
