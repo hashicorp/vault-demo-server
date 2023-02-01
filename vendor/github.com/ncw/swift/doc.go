@@ -1,3 +1,6 @@
+// Copyright (c) HashiCorp, Inc.
+// SPDX-License-Identifier: MPL-2.0
+
 /*
 Package swift provides an easy to use interface to Swift / Openstack Object Storage / Rackspace Cloud Files
 

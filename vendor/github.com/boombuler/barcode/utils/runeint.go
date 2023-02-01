@@ -1,3 +1,6 @@
+// Copyright (c) HashiCorp, Inc.
+// SPDX-License-Identifier: MPL-2.0
+
 package utils
 
 // RuneToInt converts a rune between '0' and '9' to an integer between 0 and 9

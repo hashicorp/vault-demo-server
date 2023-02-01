@@ -1,3 +1,6 @@
+// Copyright (c) HashiCorp, Inc.
+// SPDX-License-Identifier: MPL-2.0
+
 // Package errors provides errors that have stack-traces.
 //
 // This is particularly useful when you want to understand the

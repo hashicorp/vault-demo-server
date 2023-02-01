@@ -1,3 +1,6 @@
+// Copyright (c) HashiCorp, Inc.
+// SPDX-License-Identifier: MPL-2.0
+
 package dns
 
 // Implement a simple scanner, return a byte stream from an io reader.

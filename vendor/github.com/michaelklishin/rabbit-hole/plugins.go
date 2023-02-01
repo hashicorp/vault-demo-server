@@ -1,3 +1,6 @@
+// Copyright (c) HashiCorp, Inc.
+// SPDX-License-Identifier: MPL-2.0
+
 package rabbithole
 
 func (c *Client) EnabledProtocols() (xs []string, err error) {

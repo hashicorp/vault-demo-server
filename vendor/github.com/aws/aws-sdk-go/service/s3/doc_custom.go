@@ -1,3 +1,6 @@
+// Copyright (c) HashiCorp, Inc.
+// SPDX-License-Identifier: MPL-2.0
+
 // Upload Managers
 //
 // The s3manager package's Uploader provides concurrent upload of content to S3

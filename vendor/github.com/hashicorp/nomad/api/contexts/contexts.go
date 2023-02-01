@@ -1,3 +1,6 @@
+// Copyright (c) HashiCorp, Inc.
+// SPDX-License-Identifier: MPL-2.0
+
 package contexts
 
 // Context defines the scope in which a search for Nomad object operates

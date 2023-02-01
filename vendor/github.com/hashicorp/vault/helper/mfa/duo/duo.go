@@ -1,3 +1,6 @@
+// Copyright (c) HashiCorp, Inc.
+// SPDX-License-Identifier: MPL-2.0
+
 // Package duo provides a Duo MFA handler to authenticate users
 // with Duo. This handler is registered as the "duo" type in
 // mfa_config.

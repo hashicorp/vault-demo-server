@@ -1,3 +1,6 @@
+// Copyright (c) HashiCorp, Inc.
+// SPDX-License-Identifier: MPL-2.0
+
 // Package storage provides access to the Cloud Storage JSON API.
 //
 // See https://developers.google.com/storage/docs/json_api/

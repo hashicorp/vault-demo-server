@@ -1,3 +1,6 @@
+// Copyright (c) HashiCorp, Inc.
+// SPDX-License-Identifier: MPL-2.0
+
 // Package complete provides a tool for bash writing bash completion in go.
 //
 // Writing bash completion scripts is a hard work. This package provides an easy way

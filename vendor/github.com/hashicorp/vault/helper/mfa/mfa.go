@@ -1,3 +1,6 @@
+// Copyright (c) HashiCorp, Inc.
+// SPDX-License-Identifier: MPL-2.0
+
 // Package mfa provides wrappers to add multi-factor authentication
 // to any auth method.
 //

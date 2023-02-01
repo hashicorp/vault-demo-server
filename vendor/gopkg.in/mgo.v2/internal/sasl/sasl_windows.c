@@ -1,3 +1,8 @@
+/*
+ * Copyright (c) HashiCorp, Inc.
+ * SPDX-License-Identifier: MPL-2.0
+ */
+
 #include "sasl_windows.h"
 
 static const LPSTR SSPI_PACKAGE_NAME = "kerberos";

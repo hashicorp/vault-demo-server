@@ -1,3 +1,6 @@
+// Copyright (c) HashiCorp, Inc.
+// SPDX-License-Identifier: MPL-2.0
+
 package cp
 
 // http://msdn.microsoft.com/en-us/library/dd340437.aspx

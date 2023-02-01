@@ -1,3 +1,6 @@
+// Copyright (c) HashiCorp, Inc.
+// SPDX-License-Identifier: MPL-2.0
+
 // Package zk is a native Go client library for the ZooKeeper orchestration service.
 package zk
 

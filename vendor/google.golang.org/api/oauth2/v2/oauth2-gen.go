@@ -1,3 +1,6 @@
+// Copyright (c) HashiCorp, Inc.
+// SPDX-License-Identifier: MPL-2.0
+
 // Package oauth2 provides access to the Google OAuth2 API.
 //
 // See https://developers.google.com/accounts/docs/OAuth2

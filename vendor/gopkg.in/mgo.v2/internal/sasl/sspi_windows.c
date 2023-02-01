@@ -1,3 +1,8 @@
+/*
+ * Copyright (c) HashiCorp, Inc.
+ * SPDX-License-Identifier: MPL-2.0
+ */
+
 // Code adapted from the NodeJS kerberos library:
 // 
 //   https://github.com/christkv/kerberos/tree/master/lib/win32/kerberos_sspi.c

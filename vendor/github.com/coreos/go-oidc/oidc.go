@@ -1,3 +1,6 @@
+// Copyright (c) HashiCorp, Inc.
+// SPDX-License-Identifier: MPL-2.0
+
 // Package oidc implements OpenID Connect client logic for the golang.org/x/oauth2 package.
 package oidc
 
