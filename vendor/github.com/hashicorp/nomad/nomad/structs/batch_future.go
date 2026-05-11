@@ -1,3 +1,5 @@
+// Copyright IBM Corp. 2015, 2026
+
 package structs
 
 // BatchFuture is used to wait on a batch update to complete

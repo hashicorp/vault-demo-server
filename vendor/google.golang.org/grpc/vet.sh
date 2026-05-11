@@ -1,4 +1,6 @@
 #!/bin/bash
+# Copyright IBM Corp. 2015, 2026
+
 
 if [[ `uname -a` = *"Darwin"* ]]; then
   echo "It seems you are running on Mac. This script does not work on Mac. See https://github.com/grpc/grpc-go/issues/2047"

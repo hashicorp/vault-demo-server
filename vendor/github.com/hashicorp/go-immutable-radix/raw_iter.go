@@ -1,3 +1,5 @@
+// Copyright IBM Corp. 2015, 2026
+
 package iradix
 
 // rawIterator visits each of the nodes in the tree, even the ones that are not

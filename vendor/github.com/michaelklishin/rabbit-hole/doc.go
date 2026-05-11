@@ -1,3 +1,5 @@
+// Copyright IBM Corp. 2015, 2026
+
 /*
 Rabbit Hole is a Go client for the RabbitMQ HTTP API.
 

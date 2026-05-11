@@ -1,3 +1,5 @@
+// Copyright IBM Corp. 2015, 2026
+
 package lib
 
 // StrContains checks if a list contains a string

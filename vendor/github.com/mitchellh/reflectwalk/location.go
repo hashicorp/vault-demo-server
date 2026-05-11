@@ -1,3 +1,5 @@
+// Copyright IBM Corp. 2015, 2026
+
 package reflectwalk
 
 //go:generate stringer -type=Location location.go

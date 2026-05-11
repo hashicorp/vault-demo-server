@@ -1,3 +1,5 @@
+// Copyright IBM Corp. 2015, 2026
+
 // The plugin package exposes functions and helpers for communicating to
 // plugins which are implemented as standalone binary applications.
 //

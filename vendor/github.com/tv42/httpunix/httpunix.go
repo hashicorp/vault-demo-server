@@ -1,3 +1,5 @@
+// Copyright IBM Corp. 2015, 2026
+
 // Package httpunix provides a HTTP transport (net/http.RoundTripper)
 // that uses Unix domain sockets instead of HTTP.
 //

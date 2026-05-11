@@ -1,3 +1,5 @@
+// Copyright IBM Corp. 2015, 2026
+
 // +build dragonfly freebsd linux openbsd solaris
 
 package mlock

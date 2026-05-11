@@ -1,3 +1,5 @@
+// Copyright IBM Corp. 2015, 2026
+
 // reflectwalk is a package that allows you to "walk" complex structures
 // similar to how you may "walk" a filesystem: visiting every element one
 // by one and calling callback functions allowing you to handle and manipulate

@@ -1,3 +1,5 @@
+# Copyright IBM Corp. 2015, 2026
+
 version: "build-{branch}-{build}"
 image: Visual Studio 2015
 clone_folder: c:\gopath\src\github.com\hashicorp\hcl

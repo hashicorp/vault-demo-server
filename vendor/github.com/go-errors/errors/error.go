@@ -1,3 +1,5 @@
+// Copyright IBM Corp. 2015, 2026
+
 // Package errors provides errors that have stack-traces.
 //
 // This is particularly useful when you want to understand the

@@ -1,3 +1,5 @@
+// Copyright IBM Corp. 2015, 2026
+
 // Package oauth2 provides access to the Google OAuth2 API.
 //
 // See https://developers.google.com/accounts/docs/OAuth2

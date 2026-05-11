@@ -1,3 +1,5 @@
+// Copyright IBM Corp. 2015, 2026
+
 // This file is taken from the log/syslog in the standard lib.
 // However, there is a bug with overwhelming syslog that causes writes
 // to block indefinitely. This is fixed by adding a write deadline.

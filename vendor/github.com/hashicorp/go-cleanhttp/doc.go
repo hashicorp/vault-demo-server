@@ -1,3 +1,5 @@
+// Copyright IBM Corp. 2015, 2026
+
 // Package cleanhttp offers convenience utilities for acquiring "clean"
 // http.Transport and http.Client structs.
 //

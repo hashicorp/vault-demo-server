@@ -1,3 +1,5 @@
+// Copyright IBM Corp. 2015, 2026
+
 package yaml
 
 // Set the writer error and return false.

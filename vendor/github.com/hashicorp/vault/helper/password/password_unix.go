@@ -1,3 +1,5 @@
+// Copyright IBM Corp. 2015, 2026
+
 // +build linux darwin freebsd netbsd openbsd
 
 package password

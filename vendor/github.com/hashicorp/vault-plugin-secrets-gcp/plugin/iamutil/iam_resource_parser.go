@@ -1,3 +1,5 @@
+// Copyright IBM Corp. 2015, 2026
+
 //go:generate go run internal/generate_iam.go
 package iamutil
 

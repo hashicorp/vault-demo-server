@@ -1,3 +1,5 @@
+// Copyright IBM Corp. 2015, 2026
+
 package govalidator
 
 // Iterator is the function that accepts element of slice/array and its index

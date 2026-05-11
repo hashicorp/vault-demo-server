@@ -1,3 +1,5 @@
+// Copyright IBM Corp. 2015, 2026
+
 package utils
 
 // RuneToInt converts a rune between '0' and '9' to an integer between 0 and 9

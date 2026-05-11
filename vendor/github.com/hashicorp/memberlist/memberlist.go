@@ -1,3 +1,5 @@
+// Copyright IBM Corp. 2015, 2026
+
 /*
 memberlist is a library that manages cluster
 membership and member failure detection using a gossip based protocol.

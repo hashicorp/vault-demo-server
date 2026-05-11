@@ -1,3 +1,5 @@
+// Copyright IBM Corp. 2015, 2026
+
 // +build linux darwin dragonfly freebsd netbsd openbsd solaris
 
 package gsyslog

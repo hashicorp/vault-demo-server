@@ -1,3 +1,5 @@
+// Copyright IBM Corp. 2015, 2026
+
 // This file contains the password modify extended operation as specified in rfc 3062
 //
 // https://tools.ietf.org/html/rfc3062

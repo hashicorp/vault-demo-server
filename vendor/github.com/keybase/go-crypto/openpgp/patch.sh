@@ -1,4 +1,6 @@
 #!/bin/sh
+# Copyright IBM Corp. 2015, 2026
+
 
 patch < sig-v3.patch
 patch < s2k-gnu-dummy.patch

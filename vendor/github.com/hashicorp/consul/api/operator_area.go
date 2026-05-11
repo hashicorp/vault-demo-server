@@ -1,3 +1,5 @@
+// Copyright IBM Corp. 2015, 2026
+
 // The /v1/operator/area endpoints are available only in Consul Enterprise and
 // interact with its network area subsystem. Network areas are used to link
 // together Consul servers in different Consul datacenters. With network areas,

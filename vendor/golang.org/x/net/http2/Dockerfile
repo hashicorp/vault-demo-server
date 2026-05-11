@@ -1,3 +1,5 @@
+# Copyright IBM Corp. 2015, 2026
+
 #
 # This Dockerfile builds a recent curl with HTTP/2 client support, using
 # a recent nghttp2 build.

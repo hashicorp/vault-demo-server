@@ -1,3 +1,5 @@
+// Copyright IBM Corp. 2015, 2026
+
 // Package sasl is an implementation detail of the mgo package.
 //
 // This package is not meant to be used by itself.

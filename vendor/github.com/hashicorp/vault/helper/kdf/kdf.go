@@ -1,3 +1,5 @@
+// Copyright IBM Corp. 2015, 2026
+
 // This package is used to implement Key Derivation Functions (KDF)
 // based on the recommendations of NIST SP 800-108. These are useful
 // for generating unique-per-transaction keys, or situations in which

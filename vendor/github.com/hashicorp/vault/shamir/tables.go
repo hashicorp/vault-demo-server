@@ -1,3 +1,5 @@
+// Copyright IBM Corp. 2015, 2026
+
 package shamir
 
 // Tables taken from http://www.samiam.org/galois.html

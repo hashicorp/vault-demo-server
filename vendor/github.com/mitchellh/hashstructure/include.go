@@ -1,3 +1,5 @@
+// Copyright IBM Corp. 2015, 2026
+
 package hashstructure
 
 // Includable is an interface that can optionally be implemented by

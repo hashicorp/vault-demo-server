@@ -1,3 +1,5 @@
+// Copyright IBM Corp. 2015, 2026
+
 // File contains DN parsing functionality
 //
 // https://tools.ietf.org/html/rfc4514

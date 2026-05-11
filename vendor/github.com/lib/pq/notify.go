@@ -1,3 +1,5 @@
+// Copyright IBM Corp. 2015, 2026
+
 package pq
 
 // Package pq is a pure Go Postgres driver for the database/sql package.

@@ -1,3 +1,5 @@
+// Copyright IBM Corp. 2015, 2026
+
 // Package dynamodbattribute provides marshaling and unmarshaling utilities to
 // convert between Go types and dynamodb.AttributeValues.
 //

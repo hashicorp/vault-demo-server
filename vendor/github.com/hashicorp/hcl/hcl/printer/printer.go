@@ -1,3 +1,5 @@
+// Copyright IBM Corp. 2015, 2026
+
 // Package printer implements printing of AST nodes to HCL format.
 package printer
 

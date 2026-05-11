@@ -1,3 +1,5 @@
+// Copyright IBM Corp. 2015, 2026
+
 package jwt
 
 // Implements the none signing method.  This is required by the spec

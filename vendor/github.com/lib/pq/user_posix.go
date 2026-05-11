@@ -1,3 +1,5 @@
+// Copyright IBM Corp. 2015, 2026
+
 // Package pq is a pure Go Postgres driver for the database/sql package.
 
 // +build darwin dragonfly freebsd linux nacl netbsd openbsd solaris rumprun

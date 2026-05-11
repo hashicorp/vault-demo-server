@@ -1,3 +1,5 @@
+// Copyright IBM Corp. 2015, 2026
+
 // Package duo provides a Duo MFA handler to authenticate users
 // with Duo. This handler is registered as the "duo" type in
 // mfa_config.

@@ -1,3 +1,5 @@
+# Copyright IBM Corp. 2015, 2026
+
 package: go.uber.org/zap
 license: MIT
 import:

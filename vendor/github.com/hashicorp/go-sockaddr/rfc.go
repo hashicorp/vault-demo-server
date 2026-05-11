@@ -1,3 +1,5 @@
+// Copyright IBM Corp. 2015, 2026
+
 package sockaddr
 
 // ForwardingBlacklist is a faux RFC that includes a list of non-forwardable IP

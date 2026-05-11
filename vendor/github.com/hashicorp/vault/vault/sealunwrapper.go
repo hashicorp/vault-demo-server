@@ -1,3 +1,5 @@
+// Copyright IBM Corp. 2015, 2026
+
 // +build !ent
 // +build !prem
 // +build !pro

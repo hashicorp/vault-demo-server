@@ -1,3 +1,5 @@
+// Copyright IBM Corp. 2015, 2026
+
 // Package inf (type inf.Dec) implements "infinite-precision" decimal
 // arithmetic.
 // "Infinite precision" describes two characteristics: practically unlimited

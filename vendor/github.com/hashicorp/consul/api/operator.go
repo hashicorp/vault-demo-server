@@ -1,3 +1,5 @@
+// Copyright IBM Corp. 2015, 2026
+
 package api
 
 // Operator can be used to perform low-level operator tasks for Consul.

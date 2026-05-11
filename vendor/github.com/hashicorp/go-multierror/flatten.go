@@ -1,3 +1,5 @@
+// Copyright IBM Corp. 2015, 2026
+
 package multierror
 
 // Flatten flattens the given error, merging any *Errors together into

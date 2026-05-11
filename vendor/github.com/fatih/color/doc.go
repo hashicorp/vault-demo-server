@@ -1,3 +1,5 @@
+// Copyright IBM Corp. 2015, 2026
+
 /*
 Package color is an ANSI color package to output colorized or SGR defined
 output to the standard output. The API can be used in several way, pick one

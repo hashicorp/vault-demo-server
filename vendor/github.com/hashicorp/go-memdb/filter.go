@@ -1,3 +1,5 @@
+// Copyright IBM Corp. 2015, 2026
+
 package memdb
 
 // FilterFunc is a function that takes the results of an iterator and returns

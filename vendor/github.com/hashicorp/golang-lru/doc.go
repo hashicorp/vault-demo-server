@@ -1,3 +1,5 @@
+// Copyright IBM Corp. 2015, 2026
+
 // Package lru provides three different LRU caches of varying sophistication.
 //
 // Cache is a simple LRU cache. It is based on the

@@ -1,3 +1,5 @@
+// Copyright IBM Corp. 2015, 2026
+
 package api
 
 // TokenAuth is used to perform token backend operations on Vault

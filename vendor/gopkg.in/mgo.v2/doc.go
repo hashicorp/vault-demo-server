@@ -1,3 +1,5 @@
+// Copyright IBM Corp. 2015, 2026
+
 // Package mgo offers a rich MongoDB driver for Go.
 //
 // Details about the mgo project (pronounced as "mango") are found

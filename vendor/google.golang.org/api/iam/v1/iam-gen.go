@@ -1,3 +1,5 @@
+// Copyright IBM Corp. 2015, 2026
+
 // Package iam provides access to the Identity and Access Management (IAM) API.
 //
 // See https://cloud.google.com/iam/

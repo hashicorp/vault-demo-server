@@ -1,3 +1,5 @@
+// Copyright IBM Corp. 2015, 2026
+
 package raft
 
 // RPCHeader is a common sub-structure used to pass along protocol version and

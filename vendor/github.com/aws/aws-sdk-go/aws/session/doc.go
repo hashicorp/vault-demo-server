@@ -1,3 +1,5 @@
+// Copyright IBM Corp. 2015, 2026
+
 /*
 Package session provides configuration for the SDK's service clients.
 

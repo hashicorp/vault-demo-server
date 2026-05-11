@@ -1,3 +1,5 @@
+// Copyright IBM Corp. 2015, 2026
+
 // Package cmd used for command line options for the complete tool
 package cmd
 
