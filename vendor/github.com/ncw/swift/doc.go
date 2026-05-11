@@ -1,3 +1,5 @@
+// Copyright IBM Corp. 2015, 2026
+
 /*
 Package swift provides an easy to use interface to Swift / Openstack Object Storage / Rackspace Cloud Files
 

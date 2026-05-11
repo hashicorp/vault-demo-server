@@ -1,3 +1,5 @@
+// Copyright IBM Corp. 2015, 2026
+
 package api
 
 // keyringRequest is used for performing Keyring operations

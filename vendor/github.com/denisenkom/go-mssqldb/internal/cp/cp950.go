@@ -1,3 +1,5 @@
+// Copyright IBM Corp. 2015, 2026
+
 package cp
 
 var cp950 *charsetMap = &charsetMap{

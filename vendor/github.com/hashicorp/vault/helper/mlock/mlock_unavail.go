@@ -1,3 +1,5 @@
+// Copyright IBM Corp. 2015, 2026
+
 // +build android darwin nacl netbsd plan9 windows
 
 package mlock

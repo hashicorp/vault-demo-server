@@ -1,3 +1,5 @@
+// Copyright IBM Corp. 2015, 2026
+
 // Package memdb provides an in-memory database that supports transactions
 // and MVCC.
 package memdb

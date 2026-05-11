@@ -1,3 +1,5 @@
+// Copyright IBM Corp. 2015, 2026
+
 // The retryablehttp package provides a familiar HTTP client interface with
 // automatic retries and exponential backoff. It is a thin wrapper over the
 // standard net/http client library and exposes nearly the same public API.

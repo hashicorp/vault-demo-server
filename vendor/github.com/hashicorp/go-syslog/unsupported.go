@@ -1,3 +1,5 @@
+// Copyright IBM Corp. 2015, 2026
+
 // +build windows plan9 nacl
 
 package gsyslog

@@ -1,3 +1,5 @@
+// Copyright IBM Corp. 2015, 2026
+
 // +build !golint
 
 // Don't lint this file. We don't want to have to add a comment to each constant.

@@ -1,3 +1,5 @@
+// Copyright IBM Corp. 2015, 2026
+
 // Package ldap - moddn.go contains ModifyDN functionality
 //
 // https://tools.ietf.org/html/rfc4511

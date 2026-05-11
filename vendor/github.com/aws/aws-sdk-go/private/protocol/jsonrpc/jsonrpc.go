@@ -1,3 +1,5 @@
+// Copyright IBM Corp. 2015, 2026
+
 // Package jsonrpc provides JSON RPC utilities for serialization of AWS
 // requests and responses.
 package jsonrpc

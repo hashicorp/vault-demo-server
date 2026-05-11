@@ -1,3 +1,5 @@
+// Copyright IBM Corp. 2015, 2026
+
 // Upload Managers
 //
 // The s3manager package's Uploader provides concurrent upload of content to S3

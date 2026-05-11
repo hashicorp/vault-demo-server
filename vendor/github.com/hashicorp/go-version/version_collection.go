@@ -1,3 +1,5 @@
+// Copyright IBM Corp. 2015, 2026
+
 package version
 
 // Collection is a type that implements the sort.Interface interface

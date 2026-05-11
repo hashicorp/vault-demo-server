@@ -1,3 +1,5 @@
+// Copyright IBM Corp. 2015, 2026
+
 package logical
 
 // Alias represents the information used by core to create implicit entity.

@@ -1,3 +1,5 @@
+// Copyright IBM Corp. 2015, 2026
+
 // Package utils contain some utilities which are needed to create barcodes
 package utils
 

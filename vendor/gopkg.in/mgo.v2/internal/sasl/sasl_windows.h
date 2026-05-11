@@ -1,3 +1,7 @@
+/*
+ * Copyright IBM Corp. 2015, 2026
+ */
+
 #include <windows.h>
 
 #include "sspi_windows.h"

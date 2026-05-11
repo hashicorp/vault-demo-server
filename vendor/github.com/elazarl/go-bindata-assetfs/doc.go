@@ -1,3 +1,5 @@
+// Copyright IBM Corp. 2015, 2026
+
 // assetfs allows packages to serve static content embedded
 // with the go-bindata tool with the standard net/http package.
 //

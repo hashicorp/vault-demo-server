@@ -1,3 +1,7 @@
+/*
+ * Copyright IBM Corp. 2015, 2026
+ */
+
 // Code adapted from the NodeJS kerberos library:
 // 
 //   https://github.com/christkv/kerberos/tree/master/lib/win32/kerberos_sspi.c

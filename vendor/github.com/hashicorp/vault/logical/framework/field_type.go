@@ -1,3 +1,5 @@
+// Copyright IBM Corp. 2015, 2026
+
 package framework
 
 // FieldType is the enum of types that a field can be.

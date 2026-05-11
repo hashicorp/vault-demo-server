@@ -1,3 +1,5 @@
+// Copyright IBM Corp. 2015, 2026
+
 package jwt
 
 func verifyPrincipals(pcpls, auds []string) bool {

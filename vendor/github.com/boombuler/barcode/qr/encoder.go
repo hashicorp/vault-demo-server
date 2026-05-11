@@ -1,3 +1,5 @@
+// Copyright IBM Corp. 2015, 2026
+
 // Package qr can be used to create QR barcodes.
 package qr
 

@@ -1,3 +1,5 @@
+// Copyright IBM Corp. 2015, 2026
+
 // This file contains changes that are only compatible with go 1.10 and onwards.
 
 // +build go1.10

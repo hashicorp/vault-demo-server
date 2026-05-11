@@ -1,3 +1,5 @@
+// Copyright IBM Corp. 2015, 2026
+
 package api
 
 // Sys is used to perform system-related operations on Vault.

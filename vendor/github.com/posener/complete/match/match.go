@@ -1,3 +1,5 @@
+// Copyright IBM Corp. 2015, 2026
+
 package match
 
 // Match matches two strings

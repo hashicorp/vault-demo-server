@@ -1,3 +1,5 @@
+// Copyright IBM Corp. 2015, 2026
+
 package dns
 
 // Implement a simple scanner, return a byte stream from an io reader.

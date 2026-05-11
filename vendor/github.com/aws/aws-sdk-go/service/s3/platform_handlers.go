@@ -1,3 +1,5 @@
+// Copyright IBM Corp. 2015, 2026
+
 // +build !go1.6
 
 package s3

@@ -1,3 +1,5 @@
+// Copyright IBM Corp. 2015, 2026
+
 package api
 
 // Status is used to query the status-related endpoints.

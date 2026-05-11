@@ -1,3 +1,5 @@
+// Copyright IBM Corp. 2015, 2026
+
 // Package rootcerts contains functions to aid in loading CA certificates for
 // TLS connections.
 //

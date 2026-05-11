@@ -1,3 +1,5 @@
+// Copyright IBM Corp. 2015, 2026
+
 package api
 
 func (c *Sys) Renew(id string, increment int) (*Secret, error) {

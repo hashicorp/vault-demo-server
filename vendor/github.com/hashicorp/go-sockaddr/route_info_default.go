@@ -1,3 +1,5 @@
+// Copyright IBM Corp. 2015, 2026
+
 // +build android nacl plan9
 
 package sockaddr

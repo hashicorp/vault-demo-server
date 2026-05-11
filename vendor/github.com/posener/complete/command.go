@@ -1,3 +1,5 @@
+// Copyright IBM Corp. 2015, 2026
+
 package complete
 
 // Command represents a command line

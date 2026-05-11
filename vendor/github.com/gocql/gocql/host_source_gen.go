@@ -1,3 +1,5 @@
+// Copyright IBM Corp. 2015, 2026
+
 // +build genhostinfo
 
 package main

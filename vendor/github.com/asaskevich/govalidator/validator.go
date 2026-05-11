@@ -1,3 +1,5 @@
+// Copyright IBM Corp. 2015, 2026
+
 // Package govalidator is package of validators and sanitizers for strings, structs and collections.
 package govalidator
 

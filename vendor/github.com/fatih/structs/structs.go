@@ -1,3 +1,5 @@
+// Copyright IBM Corp. 2015, 2026
+
 // Package structs contains various utilities functions to work with structs.
 package structs
 

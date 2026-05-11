@@ -1,3 +1,5 @@
+// Copyright IBM Corp. 2015, 2026
+
 package cli
 
 // UiWriter is an io.Writer implementation that can be used with

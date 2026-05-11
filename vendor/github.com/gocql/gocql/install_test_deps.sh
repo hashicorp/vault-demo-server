@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# Copyright IBM Corp. 2015, 2026
+
 
 # This is not supposed to be an error-prone script; just a convenience.
 

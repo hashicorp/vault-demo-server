@@ -1,3 +1,5 @@
+// Copyright IBM Corp. 2015, 2026
+
 // Package pkcs7 implements parsing and generation of some PKCS#7 structures.
 package pkcs7
 

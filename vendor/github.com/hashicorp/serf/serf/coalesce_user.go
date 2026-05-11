@@ -1,3 +1,5 @@
+// Copyright IBM Corp. 2015, 2026
+
 package serf
 
 type latestUserEvents struct {

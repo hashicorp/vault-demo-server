@@ -1,3 +1,5 @@
+// Copyright IBM Corp. 2015, 2026
+
 package mlock
 
 // This should be set by the OS-specific packages to tell whether LockMemory

@@ -1,3 +1,5 @@
+// Copyright IBM Corp. 2015, 2026
+
 package multierror
 
 // Append is a helper function that will append more errors

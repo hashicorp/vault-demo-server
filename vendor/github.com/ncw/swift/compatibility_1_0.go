@@ -1,3 +1,5 @@
+// Copyright IBM Corp. 2015, 2026
+
 // Go 1.0 compatibility functions
 
 // +build !go1.1

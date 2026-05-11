@@ -1,3 +1,5 @@
+// Copyright IBM Corp. 2015, 2026
+
 package sockaddr
 
 // RouteInterface specifies an interface for obtaining memoized route table and

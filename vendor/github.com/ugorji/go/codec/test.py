@@ -1,4 +1,6 @@
 #!/usr/bin/env python
+# Copyright IBM Corp. 2015, 2026
+
 
 # This will create golden files in a directory passed to it.
 # A Test calls this internally to create the golden files

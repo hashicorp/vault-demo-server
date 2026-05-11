@@ -1,3 +1,7 @@
+/*
+ * Copyright IBM Corp. 2015, 2026
+ */
+
 #include "sasl_windows.h"
 
 static const LPSTR SSPI_PACKAGE_NAME = "kerberos";

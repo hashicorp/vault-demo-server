@@ -1,3 +1,5 @@
+// Copyright IBM Corp. 2015, 2026
+
 package memberlist
 
 // ConflictDelegate is a used to inform a client that

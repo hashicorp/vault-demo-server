@@ -1,3 +1,5 @@
+// Copyright IBM Corp. 2015, 2026
+
 // Package mfa provides wrappers to add multi-factor authentication
 // to any auth method.
 //

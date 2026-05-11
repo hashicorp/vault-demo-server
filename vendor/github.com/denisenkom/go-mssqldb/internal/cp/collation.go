@@ -1,3 +1,5 @@
+// Copyright IBM Corp. 2015, 2026
+
 package cp
 
 // http://msdn.microsoft.com/en-us/library/dd340437.aspx

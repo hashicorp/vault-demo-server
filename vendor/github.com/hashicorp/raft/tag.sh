@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# Copyright IBM Corp. 2015, 2026
+
 set -e
 
 # The version must be supplied from the environment. Do not include the

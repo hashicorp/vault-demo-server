@@ -1,3 +1,5 @@
+// Copyright IBM Corp. 2015, 2026
+
 // Package compute provides access to the Compute Engine API.
 //
 // See https://developers.google.com/compute/docs/reference/latest/

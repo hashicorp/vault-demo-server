@@ -1,3 +1,5 @@
+// Copyright IBM Corp. 2015, 2026
+
 /*
 AttributeValue Marshaling and Unmarshaling Helpers
 

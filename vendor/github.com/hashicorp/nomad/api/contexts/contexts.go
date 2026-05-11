@@ -1,3 +1,5 @@
+// Copyright IBM Corp. 2015, 2026
+
 package contexts
 
 // Context defines the scope in which a search for Nomad object operates

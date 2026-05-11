@@ -1,3 +1,5 @@
+// Copyright IBM Corp. 2015, 2026
+
 // package mssql implements the TDS protocol used to connect to MS SQL Server (sqlserver)
 // database servers.
 //

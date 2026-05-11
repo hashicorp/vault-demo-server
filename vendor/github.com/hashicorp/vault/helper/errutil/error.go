@@ -1,3 +1,5 @@
+// Copyright IBM Corp. 2015, 2026
+
 package errutil
 
 // UserError represents an error generated due to invalid user input

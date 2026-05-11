@@ -1,3 +1,5 @@
+// Copyright IBM Corp. 2015, 2026
+
 // Package scanner implements a scanner for HCL (HashiCorp Configuration
 // Language) source text.
 package scanner

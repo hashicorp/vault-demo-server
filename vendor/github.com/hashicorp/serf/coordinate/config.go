@@ -1,3 +1,5 @@
+// Copyright IBM Corp. 2015, 2026
+
 package coordinate
 
 // Config is used to set the parameters of the Vivaldi-based coordinate mapping

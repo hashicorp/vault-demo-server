@@ -1,3 +1,5 @@
+// Copyright IBM Corp. 2015, 2026
+
 // Package storage provides access to the Cloud Storage JSON API.
 //
 // See https://developers.google.com/storage/docs/json_api/

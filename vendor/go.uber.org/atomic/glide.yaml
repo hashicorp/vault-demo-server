@@ -1,3 +1,5 @@
+# Copyright IBM Corp. 2015, 2026
+
 package: go.uber.org/atomic
 testImport:
 - package: github.com/stretchr/testify

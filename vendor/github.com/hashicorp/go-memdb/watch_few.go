@@ -1,3 +1,5 @@
+// Copyright IBM Corp. 2015, 2026
+
 package memdb
 
 //go:generate sh -c "go run watch-gen/main.go >watch_few.go"

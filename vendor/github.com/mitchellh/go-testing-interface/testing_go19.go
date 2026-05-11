@@ -1,3 +1,5 @@
+// Copyright IBM Corp. 2015, 2026
+
 // +build go1.9
 
 // NOTE: This is a temporary copy of testing.go for Go 1.9 with the addition

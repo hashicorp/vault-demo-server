@@ -1,3 +1,5 @@
+// Copyright IBM Corp. 2015, 2026
+
 // based on https://code.google.com/p/gopass
 // Author: johnsiilver@gmail.com (John Doak)
 //
